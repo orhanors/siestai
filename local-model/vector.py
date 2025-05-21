@@ -7,7 +7,7 @@ import pandas as pd
 df = pd.read_csv("model-setup/custom-test.csv")
 embeddings = OllamaEmbeddings(model="mxbai-embed-large")
 
-db_location = "./.user/chrome_langchain_db"
+db_location = "./.user/chroma_langchain_db"
 add_documents = not os.path.exists(db_location)
 
 if add_documents:
