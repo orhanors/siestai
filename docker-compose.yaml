@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: siestai_postgres
+    environment:
+      POSTGRES_DB: siestai_dev
+      POSTGRES_USER: siestai_user
+      POSTGRES_PASSWORD: siestai_password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5439:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./.docker/postgres/init:/docker-entrypoint-initdb.d
+      - ./.docker/postgres/conf:/etc/postgresql/conf.d
+    networks:
+      - siestai_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siestai_user -d siestai_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+    
+networks:
+  siestai_network:
+    driver: bridge
