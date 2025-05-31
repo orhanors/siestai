@@ -1,5 +1,7 @@
 # Knowledge Graph RAG
 
+*[Video](https://www.youtube.com/watch?v=6vG_amAshTk&ab_channel=AdamLucek)*
+
 <img src="./media/graph_start.png" width=600>
 
 *[Improving Knowledge Graph Completion with Generative LM and neighbors](https://deeppavlov.ai/research/tpost/bn15u1y4v1-improving-knowledge-graph-completion-wit)*
