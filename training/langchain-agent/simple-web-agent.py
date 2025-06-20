@@ -6,12 +6,13 @@ from langchain.agents import initialize_agent, tool
 from langchain_ollama import ChatOllama
 from langchain.agents import AgentType
 from datetime import datetime
+from typing import List
 
 load_dotenv()
 
 #choose one of the models
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
-# llm = ChatOllama(model="llama3.2")
+# llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+llm = ChatOllama(model="deepseek-r1:8b")
 
 search_tool = TavilySearchResults(search_depth="basic")
 
@@ -21,6 +22,7 @@ def get_system_time(format: str = "%Y-%m-%d %H:%M:%S") -> str:
     current_time = datetime.now()
     formatted_time = current_time.strftime(format)
     return formatted_time
+
 
 tools = [search_tool, get_system_time]
 
@@ -32,4 +34,4 @@ agent = initialize_agent(
     verbose=True
 )
 
-agent.run("What is the current bitcoin price, when was bitcoin whitepaper released and how many days from the release date to today?")
+agent.run("When bitcoin whitepaper was published and how many days have passed since then?")
