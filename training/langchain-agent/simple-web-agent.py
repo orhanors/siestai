@@ -3,12 +3,15 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools import TavilySearchResults
 from langchain.agents import initialize_agent, tool
+from langchain_ollama import ChatOllama
 from langchain.agents import AgentType
 from datetime import datetime
 
 load_dotenv()
 
+#choose one of the models
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+# llm = ChatOllama(model="llama3.2")
 
 search_tool = TavilySearchResults(search_depth="basic")
 
@@ -29,4 +32,4 @@ agent = initialize_agent(
     verbose=True
 )
 
-agent.run("What is the exact date of the geoffrey hinton's birthday?")
+agent.run("What is the current bitcoin price, when was bitcoin whitepaper released and how many days from the release date to today?")
