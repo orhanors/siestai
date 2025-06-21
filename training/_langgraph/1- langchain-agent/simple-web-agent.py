@@ -7,12 +7,15 @@ from langchain_ollama import ChatOllama
 from langchain.agents import AgentType
 from datetime import datetime
 from typing import List
+from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
 #choose one of the models
 # llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+# llm = ChatOllama(model="llama3.2")
 llm = ChatOllama(model="deepseek-r1:8b")
+# llm = ChatOpenAI(model="gpt-4o")
 
 search_tool = TavilySearchResults(search_depth="basic")
 
@@ -34,4 +37,4 @@ agent = initialize_agent(
     verbose=True
 )
 
-agent.run("When bitcoin whitepaper was published and how many days have passed since then?")
+agent.run("izmirde şuan hava durumu nasıl?")
