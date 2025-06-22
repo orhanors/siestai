@@ -60,16 +60,14 @@ config = {
     }
 }
 
-i = 0
-while True:
-    config = {
-        "configurable": {
-            "thread_id": i
-        }
+config = {
+    "configurable": {
+        "thread_id": i
     }
+}
+while True:
     user_input = input("User: ")
     if user_input in ["exit", "quit", "end"]:
         break
     result = app.invoke({"messages": [HumanMessage(content=user_input)]}, config=config)
     print(result)
-    # i += 1
