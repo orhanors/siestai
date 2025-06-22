@@ -4,17 +4,23 @@ from langchain_openai import ChatOpenAI
 from schema import AnswerQuestion, ReviseAnswer
 from langchain_core.output_parsers.openai_tools import PydanticToolsParser
 from langchain_core.messages import HumanMessage
+from langchain_ollama import ChatOllama
 
-pydantic_parser = PydanticToolsParser(tools=[AnswerQuestion])
+pydantic_parser = PydanticToolsParser(tools=[AnswerQuestion, ReviseAnswer])
 
-llm = ChatOpenAI(model="gpt-4o")
+# llm = ChatOpenAI(model="gpt-4o")
+llm = ChatOllama(model="qwen3:8b")
+
+MAIN_ARCHETYPE = """
+You are an expert agent on crypto taxation and portfolio management.
+"""
 
 # Actor Agent Prompt
 actor_prompt_template = ChatPromptTemplate.from_messages(
     [
         (
             "system", 
-            """ You are expert AI researcher.
+            """ {main_archetype}
 Current time: {time}
 
 1. {first_instruction}
@@ -26,10 +32,12 @@ researching improvements. Do not include them inside the reflection.
        MessagesPlaceholder(variable_name="messages"),
        ("system", "Answer the user's question above using the required format."),
     ]
-).partial(time=lambda: datetime.now().isoformat())
+).partial(time=lambda: datetime.now().isoformat(), main_archetype=MAIN_ARCHETYPE)
 
 first_responder_template = actor_prompt_template.partial(first_instruction="Provide a detailed ~250 word answer")
-first_responder_chain = first_responder_template | llm.bind_tools(tools = [AnswerQuestion], tool_choice="AnswerQuestion") | pydantic_parser
+first_responder_chain = first_responder_template | llm.bind_tools(tools = [AnswerQuestion], tool_choice="AnswerQuestion") 
+
+# validator = PydanticToolsParser(tools=[AnswerQuestion])
 
 # response = first_responder_chain.invoke({
 #     "messages": [HumanMessage(content="Explain the crypto taxation rules in germany. Make a list of all the rules effecting capital gain and taxation")]
@@ -48,10 +56,10 @@ information.
 """
 
 revise_prompt_template = actor_prompt_template.partial(first_instruction=revise_instructions)
-revise_chain = revise_prompt_template | llm.bind_tools(tools = [ReviseAnswer], tool_choice="ReviseAnswer") | pydantic_parser
+revise_chain = revise_prompt_template | llm.bind_tools(tools = [ReviseAnswer], tool_choice="ReviseAnswer")
 
-response = revise_chain.invoke({
-    "messages": [HumanMessage(content="Explain the crypto taxation rules in germany. Make a list of all the rules effecting capital gain and taxation")]
-})
+# response = revise_chain.invoke({
+#     "messages": [HumanMessage(content="Explain the crypto taxation rules in germany. Make a list of all the rules effecting capital gain and taxation")]
+# })
 
-print(response)
+# print(response)
