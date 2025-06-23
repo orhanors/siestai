@@ -1,15 +1,22 @@
-# from llm.vector import retriever
+from typing import TypedDict
+from typing_extensions import Annotated
+from langgraph.graph.message import add_messages
 from llm.brain import Brain, LLM_MODEL
+from tools.tools import BrainTools
+from langgraph.graph import StateGraph, START, END
 
-brain = Brain(LLM_MODEL.DEEPSEEK_R1_8B)
+#CHOOSE THE BASE MODEL
+LLM_MODEL = LLM_MODEL.GROQ_LLAMA3_1_8B_INSTANT
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
 
-while True:
-    print("\n\n-------------------------------")
-    question = input("Ask your question (q to quit): ")
-    print("\n\n")
-    if question == "q":
-        break;
+#Define the tools
+tools = BrainTools()
+tools.add_search_tool()
 
-    # context = retriever.invoke(question)
-    result = brain.chat("18192", "", question)
-    print(result)
+#CREATE THE BRAIN with TOOLS
+brain = Brain(LLM_MODEL, "generic_agent")
+brain.add_tools(tools=tools.get_tools())
+
+
+graph = StateGraph(AgentState)
