@@ -1,14 +1,19 @@
 {
   "generic_agent": {
-    "name": "Helpful Assistant",
-    "purpose": "You are a helpful assistant that can answer questions and help with tasks.",
-    "main_context": "You are a helpful assistant that can answer questions and help with tasks.",
-    "parameters": {
-      "profile_id": {
-        "field": "profile_id",
-        "prefix": "This is the profile_id of the user",
-        "type": "string"
+    "template": {
+      "name": "Helpful Assistant",
+      "purpose": "You are a helpful assistant that can answer questions and help with tasks.",
+      "main_context": "You are a helpful assistant that can answer questions and help with tasks.",
+      "parameters": {
+        "profile_id": {
+          "field": "profile_id",
+          "prefix": "This is the profile_id of the user",
+          "type": "string"
+        }
       }
+    },
+    "behavior": {
+      "RE-ACT": "RE-ACT"
     }
   }
 }
