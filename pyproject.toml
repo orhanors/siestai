@@ -1,10 +1,17 @@
-[project]
+[tool.poetry]
 name = "siestai"
 version = "0.1.0"
 description = "Siestai is a tool for creating and managing your AI agents."
-authors = [
-    { name = "Orhan Ors", email = "orhanors97@gmail.com" }
-]
+authors = ["cryptorhan <orhan.ors@cryptobooks.tax>"]
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = ">=3.13,<4.0"
+langchain = "^0.3.26"
+langgraph = "^0.5.0"
+langchain-openai = "^0.3.27"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
