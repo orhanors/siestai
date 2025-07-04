@@ -3,7 +3,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
 import uuid
-from .database.database import Base
+from app.database.database import Base
 
 class Document(Base):
     __tablename__ = "documents"
