@@ -22,11 +22,11 @@ async def main():
         return
     
     # Fetch documents
-    documents = await mock_connector.get_documents_with_validation()
-    print(f"📄 Fetched {len(documents)} documents")
+    result = await mock_connector.get_documents_with_validation()
+    print(f"📄 Fetched {len(result.documents)} documents")
     
     # Store documents in database
-    for doc_data in documents:
+    for doc_data in result.documents:
         try:
             doc_id = await create_document(
                 title=doc_data.title,

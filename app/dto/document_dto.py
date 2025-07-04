@@ -15,3 +15,9 @@ class DocumentData:
     metadata: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+@dataclass
+class PaginatedDocuments:
+    documents: list[DocumentData]
+    next_page_info: Optional[Any] = None
+    has_more: bool = False

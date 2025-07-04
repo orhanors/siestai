@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from app.types.document_types import DocumentSource
-from app.dto.document_dto import DocumentData
+from app.dto.document_dto import DocumentData, PaginatedDocuments
 
 
 class DataConnector(ABC):
@@ -30,7 +30,7 @@ class DataConnector(ABC):
         self.config = kwargs
     
     @abstractmethod
-    async def get_documents(self, **kwargs) -> List[DocumentData]:
+    async def get_documents(self, **kwargs) -> PaginatedDocuments:
         """
         Fetch documents from the data source.
         
@@ -38,7 +38,7 @@ class DataConnector(ABC):
             **kwargs: Source-specific parameters (e.g., limit, offset, filters)
             
         Returns:
-            List of DocumentData objects ready for database storage
+            PaginatedDocuments object containing documents and pagination info
             
         Raises:
             ConnectionError: If unable to connect to the data source
@@ -116,7 +116,7 @@ class DataConnector(ABC):
         
         return True
     
-    async def get_documents_with_validation(self, **kwargs) -> List[DocumentData]:
+    async def get_documents_with_validation(self, **kwargs) -> PaginatedDocuments:
         """
         Fetch documents and validate them before returning.
         
@@ -124,10 +124,15 @@ class DataConnector(ABC):
             **kwargs: Source-specific parameters
             
         Returns:
-            List of validated DocumentData objects
+            PaginatedDocuments object with validated DocumentData and pagination info
         """
-        documents = await self.get_documents(**kwargs)
-        return [doc for doc in documents if self.validate_document_data(doc)]
+        paginated = await self.get_documents(**kwargs)
+        validated_docs = [doc for doc in paginated.documents if self.validate_document_data(doc)]
+        return type(paginated)(
+            documents=validated_docs,
+            next_page_info=getattr(paginated, 'next_page_info', None),
+            has_more=paginated.has_more
+        )
 
 
 class MockDataConnector(DataConnector):
@@ -143,7 +148,7 @@ class MockDataConnector(DataConnector):
         """Mock connection test always returns True."""
         return True
     
-    async def get_documents(self, **kwargs) -> List[DocumentData]:
+    async def get_documents(self, **kwargs) -> PaginatedDocuments:
         """
         Return mock documents for testing.
         
@@ -151,7 +156,7 @@ class MockDataConnector(DataConnector):
             **kwargs: Ignored for mock connector
             
         Returns:
-            List of mock DocumentData objects
+            PaginatedDocuments object containing mock documents and pagination info
         """
         mock_docs = [
             self.create_document_data(
@@ -180,7 +185,11 @@ class MockDataConnector(DataConnector):
             )
         ]
         
-        return mock_docs
+        return PaginatedDocuments(
+            documents=mock_docs,
+            next_page_token=None,
+            has_more=False
+        )
 
 
 # Factory function for creating connectors
