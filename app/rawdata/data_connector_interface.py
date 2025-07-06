@@ -187,7 +187,7 @@ class MockDataConnector(DataConnector):
         
         return PaginatedDocuments(
             documents=mock_docs,
-            next_page_token=None,
+            next_page_info=None,
             has_more=False
         )
 
@@ -211,11 +211,11 @@ def create_connector(source: DocumentSource, **config) -> DataConnector:
         from .intercom.intercom_connector import IntercomConnector
         return IntercomConnector(**config)
     elif source == DocumentSource.JIRA_TASK:
-        from .jira_connector import JiraConnector
+        from .jira.jira_connector import JiraConnector
         return JiraConnector(**config)
-    elif source == DocumentSource.CONFLUENCE_PAGE:
-        from .confluence_connector import ConfluenceConnector
-        return ConfluenceConnector(**config)
+    # elif source == DocumentSource.CONFLUENCE_PAGE:
+    #     from .confluence_connector import ConfluenceConnector
+    #     return ConfluenceConnector(**config)
     elif source == DocumentSource.CUSTOM:
         return MockDataConnector(DocumentSource.CUSTOM)
     else:
