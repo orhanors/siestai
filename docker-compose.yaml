@@ -31,11 +31,23 @@ services:
         - /$HOME/neo4j/data:/data
         - /$HOME/neo4j/plugins:/plugins
     environment:
-        - NEO4J_AUTH=neo4j/your_password
+        - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
     ports:
       - "7474:7474"
       - "7687:7687"
     restart: always
+
+  nats:
+    image: nats
+    command:
+      - "-js"
+    volumes:
+      - .user/.data:/tmp/nats/jetstream
+    restart: unless-stopped
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+      - "6222:6222"
 
 volumes:
   postgres_data:
