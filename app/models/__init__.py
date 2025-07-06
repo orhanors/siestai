@@ -4,8 +4,8 @@
 from ._models import *
 
 # Also import individual models for direct access
-from .documents import Document
+from .documents import DocumentEntity
 
 __all__ = [
-    'Document',
+    'DocumentEntity',
 ] 

@@ -14,11 +14,11 @@ when this module is imported by Alembic.
 """
 
 # Import all models here
-from .documents import Document
+from .documents import DocumentEntity
 
 # Export all models for Alembic
 __all__ = [
-    'Document',
+    'DocumentEntity',
 ]
 
 # Future models can be added here:

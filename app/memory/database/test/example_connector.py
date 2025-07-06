@@ -5,7 +5,7 @@ Example usage of the data connector interface.
 import asyncio
 from app.rawdata.data_connector_interface import create_connector
 from app.types.document_types import DocumentSource
-from app.database.database import create_document
+from app.memory.database.database import create_document
 
 
 async def main():

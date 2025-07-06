@@ -3,9 +3,9 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
 import uuid
-from app.database.database import Base
+from app.memory.database.database import Base
 
-class Document(Base):
+class DocumentEntity(Base):
     __tablename__ = "documents"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

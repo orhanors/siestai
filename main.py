@@ -1,5 +1,5 @@
 import asyncio
-from app.database.database import initialize_database, close_database, create_document, vector_search, list_documents, DocumentSource, db_pool
+from app.memory.database.database import initialize_database, close_database, create_document, vector_search, list_documents, DocumentSource, db_pool
 
 # Basic usage
 async def main():
