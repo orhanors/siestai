@@ -1,8 +1,8 @@
-"""create documents table
+"""create document entity
 
-Revision ID: ff901cac7bc1
+Revision ID: 9fe4a39052db
 Revises: 
-Create Date: 2025-07-04 21:24:55.086102
+Create Date: 2025-07-06 20:57:41.259373
 
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 import pgvector.sqlalchemy
 
 # revision identifiers, used by Alembic.
-revision: str = 'ff901cac7bc1'
+revision: str = '9fe4a39052db'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -31,7 +31,7 @@ def upgrade() -> None:
     sa.Column('content', sa.Text(), nullable=False),
     sa.Column('language', sa.Text(), nullable=True),
     sa.Column('doc_metadata', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('embedding', pgvector.sqlalchemy.Vector(dim=1536), nullable=True),
+    sa.Column('embedding', pgvector.sqlalchemy.vector.VECTOR(dim=1536), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')

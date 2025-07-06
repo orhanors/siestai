@@ -46,7 +46,7 @@ class DocumentSource(str, Enum):
     CONFLUENCE_PAGE = "confluence_page"
     CUSTOM = "custom"
 
-class DatabasePool:
+class DatabaseClient:
     """Enhanced async PostgreSQL connection pool manager."""
     
     def __init__(self, database_url: Optional[str] = None):
@@ -135,7 +135,7 @@ class DatabasePool:
 
 
 # Global database pool instance
-db_pool = DatabasePool()
+db_pool = DatabaseClient()
 
 
 async def initialize_database():

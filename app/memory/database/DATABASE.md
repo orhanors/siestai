@@ -15,7 +15,7 @@ The SiestAI database module provides a comprehensive PostgreSQL-based document s
 
 ### Key Components
 
-1. **DatabasePool**: Async connection pool manager
+1. **DatabaseClient**: Async connection pool manager
 2. **Document Model**: SQLAlchemy model for document storage
 3. **Document Management Functions**: CRUD operations for documents
 4. **Vector Search Functions**: Semantic search capabilities
@@ -228,7 +228,7 @@ print(f"Database status: {health['status']}")
 
 ## API Reference
 
-### DatabasePool Class
+### DatabaseClient Class
 
 #### Methods
 
