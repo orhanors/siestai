@@ -43,7 +43,7 @@ class KGClient:
         """
         # Neo4j configuration
         self.neo4j_uri = neo4j_uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.neo4j_user = neo4j_user or os.getenv("NEO4J_USER", "neo4j")
+        self.neo4j_user = neo4j_user or os.getenv("NEO4J_USERNAME", "neo4j")
         self.neo4j_password = neo4j_password or os.getenv("NEO4J_PASSWORD")
         
         if not self.neo4j_password:
@@ -354,7 +354,7 @@ class KGClient:
 
 
 # Global Graphiti client instance
-graph_client = GraphitiClient()
+graph_client = KGClient()
 
 
 async def initialize_graph():
