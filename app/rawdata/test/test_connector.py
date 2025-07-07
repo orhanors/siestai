@@ -7,5 +7,5 @@ fetcher = DocumentFetcher()
 fetcher.register_connector(DocumentSource.INTERCOM_ARTICLE)
 fetcher.register_connector(DocumentSource.CUSTOM)
 
-result = asyncio.run(fetcher.fetch_from_all_sources(limit=100))
+result = asyncio.run(fetcher.fetch_from_source(DocumentSource.INTERCOM_ARTICLE, limit=25))
 
