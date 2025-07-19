@@ -16,7 +16,7 @@ def main():
     project_root = Path(__file__).parent
     
     # Set environment variables if not already set
-    os.environ.setdefault("INGEST_STREAM_NAME", "SIESTAI-V1-INGEST")
+    os.environ.setdefault("INGEST_STREAM_NAME", "SIESTAI-V1-MEMORY-INGEST")
     os.environ.setdefault("INGEST_STREAM_REPLICAS", "1")
     os.environ.setdefault("INGEST_DB_SUBJECT", "siestai.v1.ingest.database.*")
     os.environ.setdefault("INGEST_KG_SUBJECT", "siestai.v1.ingest.knowledgegraph.*")

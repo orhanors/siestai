@@ -25,7 +25,7 @@ class StreamInfo(BaseModel):
     bytes: int
     consumer_count: int
 
-STREAM_NAME = os.getenv("INGEST_STREAM_NAME", "SIESTAI-V1-INGEST")
+STREAM_NAME = os.getenv("INGEST_STREAM_NAME", "SIESTAI-V1-MEMORY-INGEST")
 STREAM_REPLICAS = int(os.getenv("INGEST_STREAM_REPLICAS", "1"))  # Fixed: default to 1 for non-clustered mode
 DB_INGEST_SUBJECT = os.getenv("INGEST_DB_SUBJECT", "siestai.v1.ingest.database.*")
 KG_INGEST_SUBJECT = os.getenv("INGEST_KG_SUBJECT", "siestai.v1.ingest.knowledgegraph.*")
