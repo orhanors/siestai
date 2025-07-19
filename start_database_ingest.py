@@ -8,7 +8,7 @@ Or with poetry: poetry run database-ingest
 import os
 import asyncio
 from pathlib import Path
-from app.memory.database.database_ingest_job import broker
+from app.memory.database.database_ingest_job import broker, STREAM_NAME, DB_INGEST_SUBJECT
 
 def main():
     """Start the Database Ingest Job."""
@@ -30,10 +30,50 @@ def main():
     print(f"📨 Subject: {os.getenv('INGEST_DB_SUBJECT')}")
     print("-" * 50)
     
-    # The broker is already configured with subscribers in the module
+    # Create push consumer manually
+    async def create_push_consumer():
+        try:
+            js = broker._connection.jetstream()
+            
+            # Check if consumer already exists
+            try:
+                consumer_info = await js.consumer_info(STREAM_NAME, "siestai-database-ingest-job")
+                print(f"✅ Consumer 'siestai-database-ingest-job' already exists")
+                
+                # Update consumer to push mode
+                print(f"🔄 Updating consumer to push mode...")
+                consumer_config = {
+                    "durable_name": "siestai-database-ingest-job",
+                    "filter_subject": DB_INGEST_SUBJECT,
+                    "ack_policy": "explicit",
+                    "deliver_policy": "all",
+                    "deliver_group": "db-ingest-group"
+                }
+                await js.update_consumer(STREAM_NAME, "siestai-database-ingest-job", **consumer_config)
+                print(f"✅ Consumer updated to push mode")
+                
+            except Exception:
+                # Create new push consumer
+                print(f"🔧 Creating push consumer 'siestai-database-ingest-job'...")
+                consumer_config = {
+                    "durable_name": "siestai-database-ingest-job",
+                    "filter_subject": DB_INGEST_SUBJECT,
+                    "ack_policy": "explicit",
+                    "deliver_policy": "all",
+                    "deliver_group": "db-ingest-group"
+                }
+                await js.add_consumer(STREAM_NAME, **consumer_config)
+                print(f"✅ Push consumer 'siestai-database-ingest-job' created successfully")
+        except Exception as e:
+            print(f"⚠️  Warning: Could not create push consumer: {e}")
+            print("Continuing with regular NATS subscription...")
+    
+    print("ℹ️  Creating push consumer for automatic message delivery")
+    print("🔄 Max retries: 20 attempts before termination")
     
     async def run():
         await broker.start()
+        await create_push_consumer()
         print("✅ Database Ingest Job started successfully")
         print("🔄 Listening for messages...")
         try:
