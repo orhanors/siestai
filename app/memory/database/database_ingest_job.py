@@ -16,7 +16,7 @@ broker = NatsBroker("nats://localhost:4222")
 
 DB_INGEST_SUBJECT = os.getenv("INGEST_DB_SUBJECT", "siestai.v1.ingest.database.*")
 STREAM_NAME = os.getenv("INGEST_STREAM_NAME", "SIESTAI-V1-MEMORY-INGEST")
-CONSUMER_NAME = "faststream-consumer"
+CONSUMER_NAME = os.getenv("INGEST_CONSUMER_NAME", "siestai-database-ingest-job")
 QUEUE_GROUP = "db-ingest-group"
 
 async def create_jetstream_consumer():
