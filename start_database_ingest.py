@@ -7,8 +7,9 @@ Or with poetry: poetry run database-ingest
 
 import os
 import asyncio
+import signal
 from pathlib import Path
-from app.memory.database.database_ingest_job import broker, STREAM_NAME, DB_INGEST_SUBJECT
+from app.memory.database.database_ingest_job import STREAM_NAME, DB_INGEST_SUBJECT, create_jetstream_consumer, process_jetstream_messages
 
 def main():
     """Start the Database Ingest Job."""
@@ -30,59 +31,33 @@ def main():
     print(f"📨 Subject: {os.getenv('INGEST_DB_SUBJECT')}")
     print("-" * 50)
     
-    # Create push consumer manually
-    async def create_push_consumer():
-        try:
-            js = broker._connection.jetstream()
-            
-            # Check if consumer already exists
-            try:
-                consumer_info = await js.consumer_info(STREAM_NAME, "siestai-database-ingest-job")
-                print(f"✅ Consumer 'siestai-database-ingest-job' already exists")
-                
-                # Update consumer to push mode
-                print(f"🔄 Updating consumer to push mode...")
-                consumer_config = {
-                    "durable_name": "siestai-database-ingest-job",
-                    "filter_subject": DB_INGEST_SUBJECT,
-                    "ack_policy": "explicit",
-                    "deliver_policy": "all",
-                    "deliver_group": "db-ingest-group"
-                }
-                await js.update_consumer(STREAM_NAME, "siestai-database-ingest-job", **consumer_config)
-                print(f"✅ Consumer updated to push mode")
-                
-            except Exception:
-                # Create new push consumer
-                print(f"🔧 Creating push consumer 'siestai-database-ingest-job'...")
-                consumer_config = {
-                    "durable_name": "siestai-database-ingest-job",
-                    "filter_subject": DB_INGEST_SUBJECT,
-                    "ack_policy": "explicit",
-                    "deliver_policy": "all",
-                    "deliver_group": "db-ingest-group"
-                }
-                await js.add_consumer(STREAM_NAME, **consumer_config)
-                print(f"✅ Push consumer 'siestai-database-ingest-job' created successfully")
-        except Exception as e:
-            print(f"⚠️  Warning: Could not create push consumer: {e}")
-            print("Continuing with regular NATS subscription...")
-    
-    print("ℹ️  Creating push consumer for automatic message delivery")
+    print("ℹ️  Starting JetStream consumer with queue group")
     print("🔄 Max retries: 20 attempts before termination")
+    print("🗑️ Messages will be removed after acknowledgment (WORK_QUEUE retention)")
+    
+    # Create event to keep process alive
+    stop_event = asyncio.Event()
+    
+    def signal_handler():
+        print("\n🛑 Received shutdown signal...")
+        stop_event.set()
     
     async def run():
-        await broker.start()
-        await create_push_consumer()
+        # Create JetStream consumer first
+        print("🔧 Creating JetStream consumer...")
+        await create_jetstream_consumer()
+        
+        # Start JetStream message processing
         print("✅ Database Ingest Job started successfully")
         print("🔄 Listening for messages...")
+        
         try:
-            # Keep the application running
-            await asyncio.Event().wait()
+            # Start message processing
+            await process_jetstream_messages()
         except KeyboardInterrupt:
             print("\n🛑 Shutting down Database Ingest Job...")
         finally:
-            await broker.close()
+            print("✅ Database Ingest Job shutdown complete")
     
     # Run the application
     asyncio.run(run())
