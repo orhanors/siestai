@@ -35,6 +35,9 @@ async def handle_task(msg: Task, logger: Logger, raw_msg: NatsMessage):
         await raw_msg.ack()
         logger.info(f"📨 Message {msg.id} acknowledged")
         
+        # Keep the process alive by not raising exceptions
+        return True
+        
     except Exception as e:
         logger.error(f"❌ Error processing task {msg.id}: {e}")
         
