@@ -12,11 +12,10 @@ from contextlib import asynccontextmanager
 import os
 from typing import Dict, Any, Optional
 from app.utils.logger import api_logger, logger
+from app.types.document_types import DocumentSource
 
-class Task(BaseModel):
-    id: int = Field(..., example=1)
-    payload: str = Field(..., example="do something")
-    priority: Optional[str] = Field("normal", example="high")
+class MemoryIngestDto(BaseModel):
+    source: DocumentSource = Field(..., description="The source to fetch all the data from")
 
 class StreamInfo(BaseModel):
     name: str
@@ -136,12 +135,16 @@ async def publish_task_endpoint(task: Task):
     return {"status": "ok", "id": task.id, "stream": STREAM_NAME}
 
 @app.post("/publish-db-ingest")
-async def publish_db_ingest_task(task: Task):
+async def publish_db_ingest_task(task: MemoryIngestDto):
     """Publish a database ingestion task."""
-    api_logger.info(f"Publishing DB ingest task {task.id}")
-    await broker.publish(task, subject=DB_INGEST_SUBJECT)
-    api_logger.success(f"DB ingest task {task.id} published successfully")
-    return {"status": "ok", "id": task.id, "subject": DB_INGEST_SUBJECT}
+    try:
+        api_logger.info(f"Attempting to publish DB ingest task with source: {task.source}")
+        await broker.publish(task, subject=DB_INGEST_SUBJECT)
+        api_logger.info(f"Successfully published DB ingest task with source: {task.source}")
+        return {"status": "ok", "source": task.source, "subject": DB_INGEST_SUBJECT}
+    except Exception as e:
+        api_logger.error(f"Failed to publish DB ingest task with source: {task.source}, error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to publish task: {str(e)}")
 
 @app.post("/publish-kg-ingest")
 async def publish_kg_ingest_task(task: Task):

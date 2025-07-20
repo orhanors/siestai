@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+from app.types.document_types import DocumentSource
 
 
 
@@ -37,15 +38,6 @@ engine = create_engine(DATABASE_URL, echo=True)
 SessionLocal = sessionmaker(bind=engine)
 
 Base = declarative_base()
-
-# Async db configuration to use with asyncpg
-class DocumentSource(str, Enum):
-    """Document source types."""
-    INTERCOM_ARTICLE = "intercom_article"
-    JIRA_TASK = "jira_task"
-    CONFLUENCE_PAGE = "confluence_page"
-    CUSTOM = "custom"
-
 class DatabaseClient:
     """Enhanced async PostgreSQL connection pool manager."""
     

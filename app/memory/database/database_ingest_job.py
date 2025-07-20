@@ -49,7 +49,7 @@ async def create_jetstream_consumer():
         print(f"❌ Error creating consumer: {e}")
         raise
 
-async def process_jetstream_messages():
+async def ingest_memory_to_database():
     """Process messages from JetStream consumer."""
     try:
         # Connect to NATS
