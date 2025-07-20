@@ -1,1 +1,0 @@
-#Depending on the source selection, calls db or kg ingestion jobs
