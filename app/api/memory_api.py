@@ -13,11 +13,7 @@ import os
 from typing import Dict, Any, Optional
 from app.utils.logger import api_logger, logger
 from app.types.document_types import DocumentSource, Credentials
-from app.memory.database.database_ingest_job import Task
-
-class MemoryIngestDto(BaseModel):
-    source: DocumentSource = Field(..., description="The source to fetch all the data from")
-    credentials: Credentials = Field(..., description="The credentials to fetch the data from the source")
+from app.dto.memory_ingest_dto import MemoryIngestDto
 
 class StreamInfo(BaseModel):
     name: str
@@ -128,14 +124,6 @@ async def get_stream_info():
         api_logger.error(f"Failed to get stream info: {e}")
         raise HTTPException(status_code=404, detail=f"Stream not found: {str(e)}")
 
-@app.post("/publish-task")
-async def publish_task_endpoint(task: Task):
-    """Publish a task to the NATS stream."""
-    api_logger.info(f"Publishing task {task.id} to stream")
-    await to_tasks.publish(task)
-    api_logger.success(f"Task {task.id} published successfully")
-    return {"status": "ok", "id": task.id, "stream": STREAM_NAME}
-
 @app.post("/publish-db-ingest")
 async def publish_db_ingest_task(task: MemoryIngestDto):
     """Publish a database ingestion task."""
@@ -149,7 +137,7 @@ async def publish_db_ingest_task(task: MemoryIngestDto):
         raise HTTPException(status_code=500, detail=f"Failed to publish task: {str(e)}")
 
 @app.post("/publish-kg-ingest")
-async def publish_kg_ingest_task(task: Task):
+async def publish_kg_ingest_task(task: MemoryIngestDto):
     """Publish a knowledge graph ingestion task."""
     api_logger.info(f"Publishing KG ingest task {task.id}")
     await broker.publish(task, subject=KG_INGEST_SUBJECT)

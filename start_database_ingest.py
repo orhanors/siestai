@@ -9,7 +9,7 @@ import os
 import asyncio
 import signal
 from pathlib import Path
-from app.memory.database.database_ingest_job import STREAM_NAME, DB_INGEST_SUBJECT, create_jetstream_consumer, ingest_memory_to_database
+from app.memory.database.database_ingest_job import STREAM_NAME, DB_INGEST_SUBJECT, create_jetstream_consumer, process_database_ingest
 
 def main():
     """Start the Database Ingest Job."""
@@ -53,7 +53,7 @@ def main():
         
         try:
             # Start message processing
-            await ingest_memory_to_database()
+            await process_database_ingest()
         except KeyboardInterrupt:
             print("\n🛑 Shutting down Database Ingest Job...")
         finally:

@@ -27,9 +27,6 @@ uvicorn = "^0.35.0"
 faststream = {extras = ["nats"], version = "^0.5.47"}
 
 [tool.poetry.scripts]
-start-memory-api = "start_memory_api:main"
-start-api = "start_memory_api:main"
-api = "start_memory_api:main"
 memory-api = "start_memory_api:main"
 database-ingest = "start_database_ingest:main"
 
