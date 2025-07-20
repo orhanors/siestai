@@ -91,14 +91,14 @@ async def health_check():
     """Health check endpoint."""
     try:
         # Check NATS connection
-        if not broker._connection.is_connected():
+        if not broker._connection.is_connected:
             raise HTTPException(status_code=503, detail="NATS connection lost")
         
         api_logger.info("Health check requested")
         return {
             "status": "healthy",
             "service": "siestai-memory-api",
-            "nats_connected": broker._connection.is_connected(),
+            "nats_connected": broker._connection.is_connected,
             "stream_name": STREAM_NAME
         }
     except Exception as e:

@@ -63,43 +63,45 @@ class SiestaiLogger:
         """
         self.name = name
         self.logger = logging.getLogger(name)
+        
+        # Prevent propagation to avoid duplicate logs
+        self.logger.propagate = False
         self.logger.setLevel(getattr(logging, level.upper()))
         
-        # Clear existing handlers
-        self.logger.handlers.clear()
-        
-        # Create formatters
-        self.console_formatter = logging.Formatter(
-            fmt="%(message)s",
-            datefmt="[%X]"
-        )
-        
-        self.file_formatter = logging.Formatter(
-            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        
-        # Add console handler with rich formatting
-        if enable_console:
-            console_handler = RichHandler(
-                console=console,
-                show_time=True,
-                show_path=False,
-                markup=True,
-                rich_tracebacks=True,
-                tracebacks_show_locals=True
+        # Clear existing handlers only if this is a new instance
+        if not self.logger.handlers:
+            # Create formatters
+            self.console_formatter = logging.Formatter(
+                fmt="%(message)s",
+                datefmt="[%X]"
             )
-            console_handler.setFormatter(self.console_formatter)
-            self.logger.addHandler(console_handler)
-        
-        # Add file handler if specified
-        if log_file:
-            log_path = Path(log_file)
-            log_path.parent.mkdir(parents=True, exist_ok=True)
             
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(self.file_formatter)
-            self.logger.addHandler(file_handler)
+            self.file_formatter = logging.Formatter(
+                fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
+            
+            # Add console handler with rich formatting
+            if enable_console:
+                console_handler = RichHandler(
+                    console=console,
+                    show_time=True,
+                    show_path=False,
+                    markup=True,
+                    rich_tracebacks=True,
+                    tracebacks_show_locals=True
+                )
+                console_handler.setFormatter(self.console_formatter)
+                self.logger.addHandler(console_handler)
+            
+            # Add file handler if specified
+            if log_file:
+                log_path = Path(log_file)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                file_handler = logging.FileHandler(log_file)
+                file_handler.setFormatter(self.file_formatter)
+                self.logger.addHandler(file_handler)
     
     def info(self, message: str, **kwargs):
         """Log info message."""
@@ -235,13 +237,22 @@ class StatusLogger:
         console.print(table)
 
 
-# Global logger instances
-logger = SiestaiLogger("siestai")
-db_logger = SiestaiLogger("siestai.database")
-api_logger = SiestaiLogger("siestai.api")
-intercom_logger = SiestaiLogger("siestai.intercom")
-jira_logger = SiestaiLogger("siestai.jira")
-confluence_logger = SiestaiLogger("siestai.confluence")
+# Global logger instances - use singleton pattern to prevent duplicates
+_logger_instances = {}
+
+def get_logger(name: str = "siestai") -> SiestaiLogger:
+    """Get or create a logger instance with the given name."""
+    if name not in _logger_instances:
+        _logger_instances[name] = SiestaiLogger(name)
+    return _logger_instances[name]
+
+# Convenience functions for common loggers
+logger = get_logger("siestai")
+db_logger = get_logger("siestai.database")
+api_logger = get_logger("siestai.api")
+intercom_logger = get_logger("siestai.intercom")
+jira_logger = get_logger("siestai.jira")
+confluence_logger = get_logger("siestai.confluence")
 
 
 def setup_logging(

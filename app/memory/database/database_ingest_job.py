@@ -8,10 +8,10 @@ import nats
 from nats.js.api import ConsumerConfig
 import json
 from app.dto.memory_ingest_dto import MemoryIngestDto
-from app.utils.logger import SiestaiLogger
+from app.utils.logger import get_logger
 
 # Initialize logger
-logger = SiestaiLogger("siestai.database.ingest")
+logger = get_logger("siestai.database.ingest")
 
 broker = NatsBroker("nats://localhost:4222")
 
