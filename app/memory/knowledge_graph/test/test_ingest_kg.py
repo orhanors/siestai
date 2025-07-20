@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 from app.memory.knowledge_graph.knowledge_graph import KGClient
 from app.rawdata.intercom.intercom_connector import IntercomConnector
 from app.utils.logger import setup_logging
+from app.types.document_types import Credentials
 
 # Load environment variables
 load_dotenv()
@@ -65,21 +66,25 @@ class KGIngestionTest:
         logger.info("Test environment cleaned up")
     
     async def test_connection(self):
-        """Test connections to both services."""
+        """Test connections to all services."""
         logger.info("Testing connections...")
         
-        # Test KG connection
+        # Test knowledge graph connection
         try:
-            stats = await self.kg_client.get_graph_statistics()
-            logger.info(f"✅ KG connection successful. Stats: {stats}")
+            kg_ok = await self.kg_client.test_connection()
+            if kg_ok:
+                logger.info("✅ Knowledge graph connection successful")
+            else:
+                logger.warning("⚠️ Knowledge graph connection failed")
         except Exception as e:
-            logger.error(f"❌ KG connection failed: {e}")
-            return False
+            logger.error(f"❌ Knowledge graph connection test failed: {e}")
         
-        # Test Intercom connection
+        # Test Intercom connection if connector exists
         if self.intercom_connector:
             try:
-                connection_ok = await self.intercom_connector.test_connection()
+                # Create test credentials
+                credentials = Credentials(api_key="test_api_key")
+                connection_ok = await self.intercom_connector.test_connection(credentials)
                 if connection_ok:
                     logger.info("✅ Intercom connection successful")
                 else:
@@ -98,8 +103,12 @@ class KGIngestionTest:
             return self._create_mock_data()
         
         try:
+            # Create credentials for Intercom
+            credentials = Credentials(api_key="test_api_key")
+            
             # Fetch articles only for testing
             paginated_docs = await self.intercom_connector.get_documents(
+                credentials,
                 limit=limit,
                 include_conversations=False
             )

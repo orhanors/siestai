@@ -6,7 +6,7 @@ Provides a standardized interface for different data sources to return Document 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from app.types.document_types import DocumentSource
+from app.types.document_types import DocumentSource, Credentials
 from app.dto.document_dto import DocumentData, PaginatedDocuments
 
 
@@ -30,11 +30,12 @@ class DataConnector(ABC):
         self.config = kwargs
     
     @abstractmethod
-    async def get_documents(self, **kwargs) -> PaginatedDocuments:
+    async def get_documents(self, credentials: Credentials, **kwargs) -> PaginatedDocuments:
         """
         Fetch documents from the data source.
         
         Args:
+            credentials: Credentials object containing authentication information
             **kwargs: Source-specific parameters (e.g., limit, offset, filters)
             
         Returns:
@@ -47,14 +48,33 @@ class DataConnector(ABC):
         pass
     
     @abstractmethod
-    async def test_connection(self) -> bool:
+    async def test_connection(self, credentials: Credentials) -> bool:
         """
         Test the connection to the data source.
         
+        Args:
+            credentials: Credentials object containing authentication information
+            
         Returns:
             True if connection is successful, False otherwise
         """
         pass
+    
+    def generate_auth_headers(self, credentials: Credentials) -> Dict[str, str]:
+        """
+        Generate authorization headers based on credentials.
+        
+        Args:
+            credentials: Credentials object containing authentication information
+            
+        Returns:
+            Dictionary containing authorization headers
+        """
+        # Default implementation - override in subclasses for specific auth methods
+        return {
+            "Authorization": f"Bearer {credentials.api_key}",
+            "Content-Type": "application/json"
+        }
     
     def create_document_data(
         self,
@@ -116,17 +136,18 @@ class DataConnector(ABC):
         
         return True
     
-    async def get_documents_with_validation(self, **kwargs) -> PaginatedDocuments:
+    async def get_documents_with_validation(self, credentials: Credentials, **kwargs) -> PaginatedDocuments:
         """
         Fetch documents and validate them before returning.
         
         Args:
+            credentials: Credentials object containing authentication information
             **kwargs: Source-specific parameters
             
         Returns:
             PaginatedDocuments object with validated DocumentData and pagination info
         """
-        paginated = await self.get_documents(**kwargs)
+        paginated = await self.get_documents(credentials, **kwargs)
         validated_docs = [doc for doc in paginated.documents if self.validate_document_data(doc)]
         return type(paginated)(
             documents=validated_docs,
@@ -144,15 +165,16 @@ class MockDataConnector(DataConnector):
     def __init__(self, source: DocumentSource = DocumentSource.CUSTOM):
         super().__init__(source)
     
-    async def test_connection(self) -> bool:
+    async def test_connection(self, credentials: Credentials) -> bool:
         """Mock connection test always returns True."""
         return True
     
-    async def get_documents(self, **kwargs) -> PaginatedDocuments:
+    async def get_documents(self, credentials: Credentials, **kwargs) -> PaginatedDocuments:
         """
         Return mock documents for testing.
         
         Args:
+            credentials: Credentials object containing authentication information
             **kwargs: Ignored for mock connector
             
         Returns:

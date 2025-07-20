@@ -4,25 +4,28 @@ Example usage of the data connector interface.
 
 import asyncio
 from app.rawdata.data_connector_interface import create_connector
-from app.types.document_types import DocumentSource
+from app.types.document_types import DocumentSource, Credentials
 from app.memory.database.database import create_document
-
+import os
 
 async def main():
     """Example of using data connectors to fetch and store documents."""
+    
+    # Create credentials for testing
+    credentials = Credentials(api_key=os.getenv("INTERCOM_ACCESS_TOKEN"))
     
     # Create a mock connector for testing
     mock_connector = create_connector(DocumentSource.INTERCOM_ARTICLE)
     
     # Test connection
-    if await mock_connector.test_connection():
+    if await mock_connector.test_connection(credentials):
         print("✅ Mock connector connection successful")
     else:
         print("❌ Mock connector connection failed")
         return
     
     # Fetch documents
-    result = await mock_connector.get_documents_with_validation()
+    result = await mock_connector.get_documents_with_validation(credentials)
     print(f"📄 Fetched {len(result.documents)} documents")
     
     # Store documents in database

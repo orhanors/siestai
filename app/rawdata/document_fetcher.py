@@ -5,11 +5,10 @@ Utility functions and helper classes for data connectors.
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import asyncio
-from app.types.document_types import DocumentSource
+from app.types.document_types import DocumentSource, Credentials
 from app.dto.document_dto import DocumentData, PaginatedDocuments
 from .data_connector_interface import create_connector, DataConnector
 from app.utils.logger import logger, api_logger, ProgressLogger, StatusLogger
-
 
 class DocumentFetcher:
     """
@@ -37,10 +36,13 @@ class DocumentFetcher:
             logger.error(f"Failed to register connector for {source.value}: {e}")
             raise
     
-    async def test_connections(self) -> Dict[DocumentSource, bool]:
+    async def test_connections(self, credentials: Credentials) -> Dict[DocumentSource, bool]:
         """
         Test connections for all registered connectors.
         
+        Args:
+            credentials: Credentials object containing authentication information
+            
         Returns:
             Dictionary mapping source to connection test result
         """
@@ -53,7 +55,7 @@ class DocumentFetcher:
             for source, connector in self.connectors.items():
                 try:
                     api_logger.api(f"Testing connection for {source.value}")
-                    connection_ok = await connector.test_connection()
+                    connection_ok = await connector.test_connection(credentials)
                     results[source] = connection_ok
                     
                     if connection_ok:
@@ -72,12 +74,13 @@ class DocumentFetcher:
         
         return results
     
-    async def fetch_from_source(self, source: DocumentSource, **kwargs) -> Optional[PaginatedDocuments]:
+    async def fetch_from_source(self, source: DocumentSource, credentials: Credentials, **kwargs) -> Optional[PaginatedDocuments]:
         """
         Fetch documents from a specific source.
         
         Args:
             source: Document source to fetch from
+            credentials: Credentials object containing authentication information
             **kwargs: Source-specific parameters
             
         Returns:
@@ -91,7 +94,7 @@ class DocumentFetcher:
             limit = kwargs.get('limit', 'unlimited')
             api_logger.api(f"Fetching documents from {source.value} (limit: {limit})")
             
-            result = await self.connectors[source].get_documents(**kwargs)
+            result = await self.connectors[source].get_documents(credentials, **kwargs)
             
             if result:
                 doc_count = len(result.documents)
@@ -107,11 +110,12 @@ class DocumentFetcher:
             logger.error(f"Failed to fetch documents from {source.value}: {e}")
             return None
     
-    async def fetch_from_all_sources(self, **kwargs) -> Dict[DocumentSource, PaginatedDocuments]:
+    async def fetch_from_all_sources(self, credentials: Credentials, **kwargs) -> Dict[DocumentSource, PaginatedDocuments]:
         """
         Fetch documents from all registered sources.
         
         Args:
+            credentials: Credentials object containing authentication information
             **kwargs: Parameters passed to all connectors
             
         Returns:
@@ -127,7 +131,7 @@ class DocumentFetcher:
         sources = []
         
         for source in self.connectors.keys():
-            tasks.append(self.fetch_from_source(source, **kwargs))
+            tasks.append(self.fetch_from_source(source, credentials, **kwargs))
             sources.append(source)
         
         # Execute all tasks concurrently with progress tracking
@@ -187,12 +191,13 @@ class DocumentFetcher:
         StatusLogger.show_status_table(summary_data)
 
 
-async def quick_fetch(source: DocumentSource, limit: int = 10, **config) -> List[DocumentData]:
+async def quick_fetch(source: DocumentSource, credentials: Credentials, limit: int = 10, **config) -> List[DocumentData]:
     """
     Quick utility function to fetch documents from a single source.
     
     Args:
         source: Document source type
+        credentials: Credentials object containing authentication information
         limit: Maximum number of documents to fetch
         **config: Configuration parameters for the connector
         
@@ -206,7 +211,7 @@ async def quick_fetch(source: DocumentSource, limit: int = 10, **config) -> List
         
         # Test connection first
         api_logger.api(f"Testing connection for {source.value}")
-        if not await connector.test_connection():
+        if not await connector.test_connection(credentials):
             logger.error(f"Connection test failed for {source.value}")
             return []
         
@@ -214,7 +219,7 @@ async def quick_fetch(source: DocumentSource, limit: int = 10, **config) -> List
         
         # Fetch documents
         api_logger.api(f"Fetching documents from {source.value}")
-        result = await connector.get_documents(limit=limit)
+        result = await connector.get_documents(credentials, limit=limit)
         
         doc_count = len(result.documents)
         logger.success(f"Quick fetch completed: {doc_count} documents from {source.value}")

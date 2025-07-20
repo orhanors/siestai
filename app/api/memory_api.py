@@ -13,6 +13,7 @@ import os
 from typing import Dict, Any, Optional
 from app.utils.logger import api_logger, logger
 from app.types.document_types import DocumentSource, Credentials
+from app.memory.database.database_ingest_job import Task
 
 class MemoryIngestDto(BaseModel):
     source: DocumentSource = Field(..., description="The source to fetch all the data from")

@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 import re
 from ..data_connector_interface import DataConnector, DocumentData, DocumentSource
 from app.dto.document_dto import PaginatedDocuments
+from app.types.document_types import Credentials
 
 
 class IntercomConnector(DataConnector):
@@ -19,30 +20,37 @@ class IntercomConnector(DataConnector):
     Intercom data connector for fetching articles and conversations.
     """
     
-    def __init__(self, access_token: Optional[str] = None, base_url: str = "https://api.intercom.io"):
+    def __init__(self, base_url: str = "https://api.intercom.io"):
         """
         Initialize Intercom connector.
         
         Args:
-            access_token: Intercom access token
             base_url: Base URL for Intercom API
         """
         super().__init__(DocumentSource.INTERCOM_ARTICLE)
-        self.access_token = access_token or os.getenv("INTERCOM_ACCESS_TOKEN")
-        if not self.access_token:
-            raise ValueError("Intercom access token is required")
-        
         self.base_url = base_url.rstrip('/')
-        self.headers = {
-            "Authorization": f"Bearer {self.access_token}",
+    
+    def generate_auth_headers(self, credentials: Credentials) -> Dict[str, str]:
+        """
+        Generate authorization headers for Intercom API.
+        
+        Args:
+            credentials: Credentials object containing the API key
+            
+        Returns:
+            Dictionary containing authorization headers
+        """
+        return {
+            "Authorization": f"Bearer {credentials.api_key}",
             "Intercom-Version": "2.13",
             "Content-Type": "application/json"
         }
     
-    async def test_connection(self) -> bool:
+    async def test_connection(self, credentials: Credentials) -> bool:
         """Test connection to Intercom API."""
         try:
-            response = requests.get(f"{self.base_url}/articles", headers=self.headers, timeout=10)
+            headers = self.generate_auth_headers(credentials)
+            response = requests.get(f"{self.base_url}/articles", headers=headers, timeout=10)
             return response.status_code == 200
         except Exception:
             return False
@@ -80,11 +88,12 @@ class IntercomConnector(DataConnector):
         
         return text.strip()
     
-    async def get_documents(self, **kwargs) -> PaginatedDocuments:
+    async def get_documents(self, credentials: Credentials, **kwargs) -> PaginatedDocuments:
         """
         Fetch documents from Intercom.
         
         Args:
+            credentials: Credentials object containing the API key
             **kwargs: Optional parameters
                 - limit: Maximum number of articles to fetch
                 - include_conversations: Whether to include conversations
@@ -97,7 +106,7 @@ class IntercomConnector(DataConnector):
         limit = kwargs.get('limit', 100)
         next_page_info = kwargs.get('next_page_info')
         # Fetch articles and pagination info
-        articles, page_info = await self._fetch_articles(limit, next_page_info)
+        articles, page_info = await self._fetch_articles(credentials, limit, next_page_info)
         for article in articles:
             # Extract clean text from HTML body
             clean_content = self._extract_clean_text(article.get('body', ''))
@@ -122,7 +131,7 @@ class IntercomConnector(DataConnector):
         
         # Fetch conversations if requested
         if kwargs.get('include_conversations', False):
-            conversations = await self._fetch_conversations(kwargs.get('limit', 50))
+            conversations = await self._fetch_conversations(credentials, kwargs.get('limit', 50))
             for conv in conversations:
                 doc_data = self.create_document_data(
                     title=conv.get('title', f"Conversation {conv.get('id', '')}"),
@@ -149,16 +158,17 @@ class IntercomConnector(DataConnector):
             has_more=has_more
         )
     
-    async def _fetch_articles(self, limit: int = 100, next_page_info: Optional[Any] = None) -> tuple[list[Dict[str, Any]], Optional[Any]]:
+    async def _fetch_articles(self, credentials: Credentials, limit: int = 100, next_page_info: Optional[Any] = None) -> tuple[list[Dict[str, Any]], Optional[Any]]:
         """Fetch articles from Intercom API with pagination info."""
         try:
+            headers = self.generate_auth_headers(credentials)
             params = {'limit': limit}
             if next_page_info:
                 # Intercom uses 'starting_after' for cursor-based pagination
                 params['starting_after'] = next_page_info
             response = requests.get(
                 f"{self.base_url}/articles",
-                headers=self.headers,
+                headers=headers,
                 params=params
             )
             response.raise_for_status()
@@ -171,12 +181,13 @@ class IntercomConnector(DataConnector):
             print(f"Error fetching Intercom articles: {e}")
             return [], None
     
-    async def _fetch_conversations(self, limit: int = 50) -> List[Dict[str, Any]]:
+    async def _fetch_conversations(self, credentials: Credentials, limit: int = 50) -> List[Dict[str, Any]]:
         """Fetch conversations from Intercom API."""
         try:
+            headers = self.generate_auth_headers(credentials)
             response = requests.get(
                 f"{self.base_url}/conversations",
-                headers=self.headers,
+                headers=headers,
                 params={'limit': limit}
             )
             response.raise_for_status()
