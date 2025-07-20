@@ -12,10 +12,11 @@ from contextlib import asynccontextmanager
 import os
 from typing import Dict, Any, Optional
 from app.utils.logger import api_logger, logger
-from app.types.document_types import DocumentSource
+from app.types.document_types import DocumentSource, Credentials
 
 class MemoryIngestDto(BaseModel):
     source: DocumentSource = Field(..., description="The source to fetch all the data from")
+    credentials: Credentials = Field(..., description="The credentials to fetch the data from the source")
 
 class StreamInfo(BaseModel):
     name: str
