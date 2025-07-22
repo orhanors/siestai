@@ -7,8 +7,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from app.types.document_types import DocumentSource, Credentials
-from app.dto.document_dto import DocumentData, PaginatedDocuments
-
+from app.dto.document_dto import DocumentData, PaginatedDocuments, FetchMetadata
 
 class DataConnector(ABC):
     """
@@ -30,7 +29,7 @@ class DataConnector(ABC):
         self.config = kwargs
     
     @abstractmethod
-    async def get_documents(self, credentials: Credentials, **kwargs) -> PaginatedDocuments:
+    async def get_documents(self, credentials: Credentials, metadata: FetchMetadata, **kwargs) -> PaginatedDocuments:
         """
         Fetch documents from the data source.
         
@@ -151,7 +150,7 @@ class DataConnector(ABC):
         validated_docs = [doc for doc in paginated.documents if self.validate_document_data(doc)]
         return type(paginated)(
             documents=validated_docs,
-            next_page_info=getattr(paginated, 'next_page_info', None),
+            fetch_metadata=getattr(paginated, 'fetch_metadata', None),
             has_more=paginated.has_more
         )
 
@@ -209,7 +208,7 @@ class MockDataConnector(DataConnector):
         
         return PaginatedDocuments(
             documents=mock_docs,
-            next_page_info=None,
+            fetch_metadata=None,
             has_more=False
         )
 

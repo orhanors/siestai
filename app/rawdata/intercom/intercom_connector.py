@@ -11,9 +11,8 @@ import requests
 from bs4 import BeautifulSoup
 import re
 from ..data_connector_interface import DataConnector, DocumentData, DocumentSource
-from app.dto.document_dto import PaginatedDocuments
+from app.dto.document_dto import PaginatedDocuments, FetchMetadata
 from app.types.document_types import Credentials
-
 
 class IntercomConnector(DataConnector):
     """
@@ -88,7 +87,7 @@ class IntercomConnector(DataConnector):
         
         return text.strip()
     
-    async def get_documents(self, credentials: Credentials, **kwargs) -> PaginatedDocuments:
+    async def get_documents(self, credentials: Credentials, metadata: FetchMetadata,  **kwargs) -> PaginatedDocuments:
         """
         Fetch documents from Intercom.
         
@@ -97,16 +96,16 @@ class IntercomConnector(DataConnector):
             **kwargs: Optional parameters
                 - limit: Maximum number of articles to fetch
                 - include_conversations: Whether to include conversations
-                - next_page_info: Pagination info for fetching next page
+                - fetch_metadata: Pagination info for fetching next page
                 
         Returns:
             PaginatedDocuments object containing documents and pagination info
         """
         documents = []
-        limit = kwargs.get('limit', 100)
-        next_page_info = kwargs.get('next_page_info')
+        limit = metadata.metadata.get("limit", 100) if metadata.metadata else 100
+        fetch_metadata = metadata.metadata.get("next_page_info") if metadata.metadata else None
         # Fetch articles and pagination info
-        articles, page_info = await self._fetch_articles(credentials, limit, next_page_info)
+        articles, page_info = await self._fetch_articles(credentials, limit, fetch_metadata)
         for article in articles:
             # Extract clean text from HTML body
             clean_content = self._extract_clean_text(article.get('body', ''))
@@ -154,7 +153,7 @@ class IntercomConnector(DataConnector):
         has_more = bool(page_info)
         return PaginatedDocuments(
             documents=documents,
-            next_page_info=page_info,
+            fetch_metadata=FetchMetadata(metadata={"next_page_info": page_info}),
             has_more=has_more
         )
     

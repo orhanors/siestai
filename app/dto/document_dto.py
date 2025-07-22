@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from datetime import datetime
 from app.types.document_types import DocumentSource
+from pydantic import BaseModel
 
 @dataclass
 class DocumentData:
@@ -16,8 +17,12 @@ class DocumentData:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+class FetchMetadata(BaseModel):
+    metadata: Optional[Any] = None
+
+
 @dataclass
 class PaginatedDocuments:
     documents: list[DocumentData]
-    next_page_info: Optional[Any] = None
+    fetch_metadata: FetchMetadata
     has_more: bool = False

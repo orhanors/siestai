@@ -146,6 +146,9 @@ class SiestaiLogger:
     def confluence(self, message: str):
         """Log Confluence operation message."""
         self.logger.info(f"[confluence]📚 {message}[/confluence]")
+    def document(self, message: str):
+        """Log document operation message."""
+        self.logger.info(f"[document]📄 {message}[/document]")
 
 
 class ProgressLogger:

@@ -6,9 +6,10 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import asyncio
 from app.types.document_types import DocumentSource, Credentials
-from app.dto.document_dto import DocumentData, PaginatedDocuments
+from app.dto.document_dto import DocumentData, PaginatedDocuments, FetchMetadata
 from .data_connector_interface import create_connector, DataConnector
 from app.utils.logger import logger, api_logger, ProgressLogger, StatusLogger
+
 
 class DocumentFetcher:
     """
@@ -74,7 +75,7 @@ class DocumentFetcher:
         
         return results
     
-    async def fetch_from_source(self, source: DocumentSource, credentials: Credentials, **kwargs) -> Optional[PaginatedDocuments]:
+    async def fetch_from_source(self, source: DocumentSource, credentials: Credentials, metadata: FetchMetadata, **kwargs) -> Optional[PaginatedDocuments]:
         """
         Fetch documents from a specific source.
         
@@ -91,16 +92,15 @@ class DocumentFetcher:
             return None
         
         try:
-            limit = kwargs.get('limit', 'unlimited')
-            api_logger.api(f"Fetching documents from {source.value} (limit: {limit})")
+            api_logger.api(f"Fetching documents from {source.value} ")
             
-            result = await self.connectors[source].get_documents(credentials, **kwargs)
+            result = await self.connectors[source].get_documents(credentials, metadata, **kwargs)
             
             if result:
                 doc_count = len(result.documents)
                 has_more = result.has_more
                 logger.success(f"Successfully fetched {doc_count} documents from {source.value} source (has_more: {has_more})")
-                logger.debug(f"Metadata: {result.next_page_info}")
+                logger.debug(f"Metadata: {result.fetch_metadata}")
             else:
                 logger.warning(f"No documents returned from {source.value}")
                 

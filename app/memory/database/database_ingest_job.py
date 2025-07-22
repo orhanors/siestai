@@ -9,6 +9,10 @@ from nats.js.api import ConsumerConfig
 import json
 from app.dto.memory_ingest_dto import MemoryIngestDto
 from app.utils.logger import get_logger
+from app.rawdata.document_fetcher import DocumentFetcher
+from app.types.document_types import DocumentSource, Credentials
+from app.dto.document_dto import FetchMetadata, PaginatedDocuments
+from app.memory.database.database import create_document
 
 # Initialize logger
 logger = get_logger("siestai.database.ingest")
@@ -59,13 +63,38 @@ async def create_jetstream_consumer():
         logger.debug(f"Consumer creation failed with stream='{STREAM_NAME}', consumer='{CONSUMER_NAME}', subject='{DB_INGEST_SUBJECT}'")
         raise
 
+async def _fetch_data_from_source(fetcher: DocumentFetcher, source: DocumentSource, credentials: Credentials, metadata: FetchMetadata) -> PaginatedDocuments:
+    result = await fetcher.fetch_from_source(source, credentials, metadata)
+    return result
+
+async def _save_data_to_db(fetch_result: PaginatedDocuments):    
+    # Store documents in database
+    for doc_data in fetch_result.documents:
+        try:
+            doc_id = await create_document(
+                title=doc_data.title,
+                content=doc_data.content,
+                source=doc_data.source,
+                original_id=doc_data.original_id,
+                content_url=doc_data.content_url,
+                language=doc_data.language,
+                metadata=doc_data.metadata
+            )
+            logger.document(f"Stored document: {doc_data.title} (ID: {doc_id})")
+        except Exception as e:
+            logger.error(f"❌ Failed to store document {doc_data.title}: {e}")
+
 async def ingest_to_database(memory_ingest_dto: MemoryIngestDto):
     """Ingest a batch of data to the database."""
     logger.database(f"Starting database ingestion for source: {memory_ingest_dto.source}")
     logger.debug(f"Ingestion details: source={memory_ingest_dto.source}, data_type={getattr(memory_ingest_dto, 'data_type', 'unknown')}")
-    
+    fetcher = DocumentFetcher()
+    fetcher.register_connector(memory_ingest_dto.source)
     try:
-        # TODO: Implement actual database ingestion logic
+        result = await _fetch_data_from_source(fetcher, memory_ingest_dto.source, memory_ingest_dto.credentials, memory_ingest_dto.metadata)
+        logger.document(f"Fetched {len(result.documents)} documents")
+        await _save_data_to_db(result)
+        logger.document(f"Saved {len(result.documents)} documents to the database")
         logger.info(f"Database ingestion completed for source: {memory_ingest_dto.source}")
         return True
     except Exception as e:
