@@ -14,6 +14,7 @@ from app.types.document_types import DocumentSource, Credentials
 from app.dto.document_dto import FetchMetadata, PaginatedDocuments
 from app.memory.database.database import create_document
 from app.utils.rate_limiter import RateLimitConfig
+from app.services.embedding_service import generate_document_embedding
 
 # Initialize logger
 logger = get_logger("siestai.database.ingest")
@@ -86,6 +87,9 @@ async def _save_data_to_db(fetch_result: PaginatedDocuments):
     # Store documents in database
     for doc_data in fetch_result.documents:
         try:
+            # Generate embedding for document
+            embedding = await generate_document_embedding(doc_data)
+            
             doc_id = await create_document(
                 title=doc_data.title,
                 content=doc_data.content,
@@ -93,9 +97,10 @@ async def _save_data_to_db(fetch_result: PaginatedDocuments):
                 original_id=doc_data.original_id,
                 content_url=doc_data.content_url,
                 language=doc_data.language,
-                metadata=doc_data.metadata
+                metadata=doc_data.metadata,
+                embedding=embedding
             )
-            logger.document(f"Stored document: {doc_data.title} (ID: {doc_id})")
+            logger.document(f"Stored document with embedding: {doc_data.title} (ID: {doc_id})")
         except Exception as e:
             logger.error(f"❌ Failed to store document {doc_data.title}: {e}")
 
