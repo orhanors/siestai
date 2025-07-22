@@ -13,6 +13,7 @@ from app.rawdata.document_fetcher import DocumentFetcher
 from app.types.document_types import DocumentSource, Credentials
 from app.dto.document_dto import FetchMetadata, PaginatedDocuments
 from app.memory.database.database import create_document
+from app.utils.rate_limiter import RateLimitConfig
 
 # Initialize logger
 logger = get_logger("siestai.database.ingest")
@@ -23,6 +24,20 @@ DB_INGEST_SUBJECT = os.getenv("INGEST_DB_SUBJECT", "siestai.v1.ingest.database.*
 STREAM_NAME = os.getenv("INGEST_STREAM_NAME", "SIESTAI-V1-MEMORY-INGEST")
 CONSUMER_NAME = os.getenv("INGEST_CONSUMER_NAME", "siestai-database-ingest-job")
 QUEUE_GROUP = "db-ingest-group"
+
+def _get_rate_limit_config(source: DocumentSource) -> RateLimitConfig:
+    """Get rate limit configuration for a specific source."""
+    # Configure per-source rate limits to respect API limits
+    rate_configs = {
+        DocumentSource.INTERCOM_ARTICLE: RateLimitConfig(requests_per_second=1.0, burst_size=5),
+        DocumentSource.JIRA_TASK: RateLimitConfig(requests_per_second=0.5, burst_size=3),
+        DocumentSource.CONFLUENCE_PAGE: RateLimitConfig(requests_per_second=2.0, burst_size=10),
+        DocumentSource.CUSTOM: RateLimitConfig(requests_per_second=1.0, burst_size=5),
+    }
+    
+    # Default conservative rate limit
+    default_config = RateLimitConfig(requests_per_second=0.5, burst_size=3)
+    return rate_configs.get(source, default_config)
 
 async def create_jetstream_consumer():
     """Create JetStream consumer if it doesn't exist."""
@@ -39,7 +54,7 @@ async def create_jetstream_consumer():
         try:
             await js.consumer_info(STREAM_NAME, CONSUMER_NAME)
             logger.success(f"Consumer '{CONSUMER_NAME}' already exists in stream '{STREAM_NAME}'")
-        except Exception as consumer_error:
+        except Exception:
             logger.info(f"Consumer '{CONSUMER_NAME}' does not exist, creating new consumer")
             
             # Create consumer with minimal configuration
@@ -63,8 +78,8 @@ async def create_jetstream_consumer():
         logger.debug(f"Consumer creation failed with stream='{STREAM_NAME}', consumer='{CONSUMER_NAME}', subject='{DB_INGEST_SUBJECT}'")
         raise
 
-async def _fetch_data_from_source(fetcher: DocumentFetcher, source: DocumentSource, credentials: Credentials, metadata: FetchMetadata) -> PaginatedDocuments:
-    result = await fetcher.fetch_from_source(source, credentials, metadata)
+async def _fetch_data_from_source(fetcher: DocumentFetcher, source: DocumentSource, credentials: Credentials, metadata: FetchMetadata, rate_limit_config: RateLimitConfig = None) -> PaginatedDocuments:
+    result = await fetcher.fetch_from_source(source, credentials, metadata, rate_limit_config)
     return result
 
 async def _save_data_to_db(fetch_result: PaginatedDocuments):    
@@ -84,19 +99,75 @@ async def _save_data_to_db(fetch_result: PaginatedDocuments):
         except Exception as e:
             logger.error(f"❌ Failed to store document {doc_data.title}: {e}")
 
+async def _send_next_batch_message(memory_ingest_dto: MemoryIngestDto, next_metadata: FetchMetadata):
+    """Send message for next batch processing."""
+    try:
+        nc = await nats.connect("nats://localhost:4222")
+        js = nc.jetstream()
+        
+        # Log current pagination metadata for debugging
+        logger.info(f"Sending next batch with metadata: {next_metadata.metadata}")
+        
+        # Create next batch message with updated metadata
+        next_batch = MemoryIngestDto(
+            source=memory_ingest_dto.source,
+            credentials=memory_ingest_dto.credentials,
+            metadata=next_metadata
+        )
+        
+        # Publish to the same subject for continuation
+        subject = f"siestai.v1.ingest.database.{memory_ingest_dto.source.value}"
+        message_json = next_batch.model_dump_json()
+        logger.debug(f"Publishing message: {message_json}")
+        await js.publish(subject, message_json.encode())
+        
+        logger.info(f"Queued next batch for {memory_ingest_dto.source.value} with updated metadata")
+        await nc.close()
+        
+    except Exception as e:
+        logger.error(f"Failed to send next batch message: {e}")
+        raise
+
 async def ingest_to_database(memory_ingest_dto: MemoryIngestDto):
     """Ingest a batch of data to the database."""
     logger.database(f"Starting database ingestion for source: {memory_ingest_dto.source}")
-    logger.debug(f"Ingestion details: source={memory_ingest_dto.source}, data_type={getattr(memory_ingest_dto, 'data_type', 'unknown')}")
+    logger.info(f"Received metadata: {memory_ingest_dto.metadata.metadata}")
+    logger.debug(f"Ingestion details: source={memory_ingest_dto.source}, metadata={memory_ingest_dto.metadata}")
+    
     fetcher = DocumentFetcher()
     fetcher.register_connector(memory_ingest_dto.source)
+    
     try:
-        result = await _fetch_data_from_source(fetcher, memory_ingest_dto.source, memory_ingest_dto.credentials, memory_ingest_dto.metadata)
+        # Configure rate limiting based on source
+        rate_limit_config = _get_rate_limit_config(memory_ingest_dto.source)
+        
+        # Fetch data with rate limiting
+        result = await _fetch_data_from_source(
+            fetcher, 
+            memory_ingest_dto.source, 
+            memory_ingest_dto.credentials, 
+            memory_ingest_dto.metadata,
+            rate_limit_config
+        )
+        
         logger.document(f"Fetched {len(result.documents)} documents")
+        logger.info(f"Result has_more: {result.has_more}")
+        logger.info(f"Result metadata after fetch: {result.fetch_metadata.metadata}")
+        
+        # Save current batch to database
         await _save_data_to_db(result)
         logger.document(f"Saved {len(result.documents)} documents to the database")
+        
+        # Check if there are more pages to process
+        if result.has_more:
+            logger.info(f"More data available for {memory_ingest_dto.source.value}, queuing next batch")
+            await _send_next_batch_message(memory_ingest_dto, result.fetch_metadata)
+        else:
+            logger.info(f"All data processed for {memory_ingest_dto.source.value}, ingestion complete")
+            
         logger.info(f"Database ingestion completed for source: {memory_ingest_dto.source}")
         return True
+        
     except Exception as e:
         logger.error(f"Database ingestion failed for source {memory_ingest_dto.source}: {e}")
         raise

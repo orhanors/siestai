@@ -9,6 +9,7 @@ from app.types.document_types import DocumentSource, Credentials
 from app.dto.document_dto import DocumentData, PaginatedDocuments, FetchMetadata
 from .data_connector_interface import create_connector, DataConnector
 from app.utils.logger import logger, api_logger, ProgressLogger, StatusLogger
+from app.utils.rate_limiter import global_rate_limiter, RateLimitConfig
 
 
 class DocumentFetcher:
@@ -75,13 +76,15 @@ class DocumentFetcher:
         
         return results
     
-    async def fetch_from_source(self, source: DocumentSource, credentials: Credentials, metadata: FetchMetadata, **kwargs) -> Optional[PaginatedDocuments]:
+    async def fetch_from_source(self, source: DocumentSource, credentials: Credentials, metadata: FetchMetadata, rate_limit_config: Optional[RateLimitConfig] = None, **kwargs) -> Optional[PaginatedDocuments]:
         """
-        Fetch documents from a specific source.
+        Fetch documents from a specific source with rate limiting.
         
         Args:
             source: Document source to fetch from
             credentials: Credentials object containing authentication information
+            metadata: Metadata for pagination and fetching
+            rate_limit_config: Optional rate limit configuration
             **kwargs: Source-specific parameters
             
         Returns:
@@ -92,7 +95,11 @@ class DocumentFetcher:
             return None
         
         try:
-            api_logger.api(f"Fetching documents from {source.value} ")
+            # Apply rate limiting before making request
+            rate_limiter = global_rate_limiter.get_limiter(source.value, rate_limit_config)
+            await rate_limiter.acquire()
+            
+            api_logger.api(f"Fetching documents from {source.value}")
             
             result = await self.connectors[source].get_documents(credentials, metadata, **kwargs)
             

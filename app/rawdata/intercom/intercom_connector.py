@@ -161,10 +161,13 @@ class IntercomConnector(DataConnector):
         """Fetch articles from Intercom API with pagination info."""
         try:
             headers = self.generate_auth_headers(credentials)
-            params = {'limit': limit}
+            params = {'per_page': limit}
             if next_page_info:
-                # Intercom uses 'starting_after' for cursor-based pagination
-                params['starting_after'] = next_page_info
+                # Intercom uses page-based pagination
+                params['page'] = next_page_info
+            else:
+                # Start with page 1 if no page info provided
+                params['page'] = 1
             response = requests.get(
                 f"{self.base_url}/articles",
                 headers=headers,
@@ -173,8 +176,26 @@ class IntercomConnector(DataConnector):
             response.raise_for_status()
             data = response.json()
             articles = data.get('data', [])
-            # Intercom pagination info is in 'pages' object
-            page_info = data.get('pages', {}).get('next')
+            # Intercom pagination info is in 'pages' object  
+            next_url = data.get('pages', {}).get('next')
+            
+            # Extract page number from the next URL for proper pagination
+            page_info = None
+            if next_url:
+                from urllib.parse import urlparse, parse_qs
+                parsed_url = urlparse(next_url)
+                query_params = parse_qs(parsed_url.query)
+                
+                # Intercom uses page-based pagination, extract page number
+                if 'page' in query_params:
+                    page_info = int(query_params['page'][0])
+                else:
+                    # Fallback: try to extract from URL pattern
+                    import re
+                    page_match = re.search(r'page=(\d+)', next_url)
+                    if page_match:
+                        page_info = int(page_match.group(1))
+            
             return articles, page_info
         except Exception as e:
             print(f"Error fetching Intercom articles: {e}")
