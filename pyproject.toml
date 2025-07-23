@@ -31,6 +31,7 @@ langchain-community = "^0.3.27"
 memory-api = "start_memory_api:main"
 database-ingest = "start_database_ingest:main"
 kg-ingest = "start_kg_ingest:main"
+research-agent = "start_research_agent:main"
 
 [build-system]
 requires = ["poetry-core"]
