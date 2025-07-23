@@ -245,17 +245,17 @@ class ResearchAgent:
                 user_id=state["user_id"],
                 profile_id=state["profile_id"],
                 session_id=state.get("session_id"),
-                similarity_threshold=0.6  # Lower threshold for better recall
+                similarity_threshold=0.5  # Lower threshold for better recall
             )
             
             # Get query embedding for similarity search
             query_embedding = await self.embeddings.aembed_query(state["query"])
             
-            # Get memory context
+            # Get memory context with more generous parameters
             memory_context = await chat_session.get_memory_context(
                 query_embedding=query_embedding,
-                max_similar=3,
-                max_recent=5
+                max_similar=5,  # More similar messages
+                max_recent=10   # More recent messages
             )
             
             state["memory_context"] = memory_context
@@ -322,21 +322,32 @@ class ResearchAgent:
             if state.get("memory_context") and self.enable_memory:
                 memory_context = state["memory_context"]
                 
-                # Add similar messages from history
-                if memory_context.get("similar_messages"):
-                    similar_context = "\n".join([
-                        f"Past Message: {msg.get('content', '')[:200]}... (similarity: {msg.get('similarity', 0):.2f})"
-                        for msg in memory_context["similar_messages"][:2]
-                    ])
-                    context_parts.append(f"Similar Past Conversations:\n{similar_context}")
-                
-                # Add recent activity (prioritize this over similar messages for better continuity)
+                # Add recent activity first (prioritize for better continuity)
                 if memory_context.get("recent_context"):
                     recent_context = "\n".join([
                         f"{msg.get('role', 'User').upper()}: {msg.get('content', '')}"
-                        for msg in memory_context["recent_context"][:5]  # Show more recent context
+                        for msg in memory_context["recent_context"][:8]  # Show more recent context
                     ])
-                    context_parts.insert(0, f"Recent Conversation:\n{recent_context}")  # Insert at beginning for priority
+                    context_parts.insert(0, f"Recent Conversation History:\n{recent_context}")
+                
+                # Add current session context for immediate continuity
+                if memory_context.get("current_session"):
+                    current_messages = memory_context["current_session"]
+                    if len(current_messages) > 0:
+                        # Show all current session messages (not truncated)
+                        current_context = "\n".join([
+                            f"{msg.get('role', 'User').upper()}: {msg.get('content', '')}"  
+                            for msg in current_messages
+                        ])
+                        context_parts.insert(0, f"Current Session:\n{current_context}")
+                
+                # Add similar messages from history (with more content preserved)
+                if memory_context.get("similar_messages"):
+                    similar_context = "\n".join([
+                        f"PAST: {msg.get('content', '')[:400]}... (similarity: {msg.get('similarity', 0):.2f})"
+                        for msg in memory_context["similar_messages"][:3]  # More similar messages
+                    ])
+                    context_parts.append(f"Similar Past Conversations:\n{similar_context}")
             
             context = "\n\n---\n\n".join(context_parts)
             state["context"] = context
@@ -365,10 +376,11 @@ class ResearchAgent:
                 
                 if has_recent or has_similar:
                     memory_instruction = f"""
-10. IMPORTANT: Use the conversation history provided in the context to maintain continuity
-11. When a user asks about information mentioned in recent conversations, refer to that history
-12. If the user asks about their name, preferences, or previous topics, check the Recent Conversation section
-13. Always prioritize recent conversation context over web search for personal information"""
+10. CRITICAL: The user has an ongoing conversation history - USE IT to maintain continuity
+11. Check the "Current Session" and "Recent Conversation History" sections for personal information
+12. If the user asks about their name, job, preferences, or previous topics, ALWAYS refer to the conversation history
+13. Names, personal details, and user context from conversation history take ABSOLUTE PRIORITY over any other sources
+14. When personal information is found in conversation history, reference it confidently without asking the user to remind you"""
             
             system_message = SystemMessage(content=f"""You are a research assistant that synthesizes information from multiple sources to provide comprehensive, accurate answers.
 
