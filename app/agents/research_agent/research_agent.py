@@ -190,6 +190,18 @@ class ResearchAgent:
             context = "\n\n---\n\n".join(context_parts)
             state["context"] = context
             
+            # Prepare references for documents with content_url
+            document_references = []
+            if state.get("documents"):
+                for i, doc in enumerate(state["documents"], 1):
+                    if doc.get("content_url"):
+                        document_references.append({
+                            "number": i,
+                            "title": doc.get("title", "Unknown Document"),
+                            "url": doc.get("content_url"),
+                            "source": doc.get("source", "unknown")
+                        })
+            
             # Create the prompt
             system_message = SystemMessage(content="""You are a research assistant that synthesizes information from multiple sources to provide comprehensive, accurate answers.
 
@@ -199,7 +211,8 @@ Instructions:
 3. Cite your sources when possible
 4. If information is conflicting, acknowledge this and explain
 5. If you don't have enough information, say so clearly
-6. Be concise but thorough""")
+6. Be concise but thorough
+7. When referencing documents from the knowledge base, you can refer to them by their titles""")
             
             human_message = HumanMessage(content=f"""Question: {state['query']}
 
@@ -216,6 +229,7 @@ Please provide a comprehensive answer based on the available information.""")
                 "num_documents": len(state.get("documents", [])),
                 "num_kg_results": len(state.get("kg_results", [])),
                 "num_web_results": len(state.get("web_results", [])),
+                "document_references": document_references,
                 "sources_used": [
                     source for source in ["documents", "knowledge_graph", "web_search"]
                     if state.get(f"{source.replace('_', '')}_results" if source != "documents" else source, [])

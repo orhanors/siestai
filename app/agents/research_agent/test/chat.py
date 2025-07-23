@@ -38,11 +38,52 @@ def display_stats(metadata):
     table.add_row("📄 Documents:", str(metadata.get('num_documents', 0)))
     table.add_row("🌐 Web Results:", str(metadata.get('num_web_results', 0)))
     
-    sources = metadata.get('sources_used', [])
-    if sources:
-        table.add_row("📊 Sources:", ', '.join(sources))
-    
     console.print(table)
+
+
+def display_ref_table(references):
+    """Display document references with clickable links."""
+    if not references:
+        return
+    
+    console.print("\n[bold blue]📚 Document References:[/bold blue]")
+    
+    ref_table = Table(show_header=True, header_style="bold cyan", border_style="blue")
+    ref_table.add_column("#", style="cyan", width=4)
+    ref_table.add_column("Title", style="white", width=25)
+    ref_table.add_column("Source", style="dim", width=15)
+    ref_table.add_column("Link", style="blue", width=45)
+    
+    for ref in references:
+        # Create clickable link
+        full_url = ref['url']
+        
+        # For display, truncate URL if too long but keep it clickable
+        if len(full_url) > 42:
+            display_url = full_url[:39] + "..."
+        else:
+            display_url = full_url
+        
+        # Create clickable link using Rich markup
+        clickable_link = f"[link={full_url}]{display_url}[/link]"
+        
+        ref_table.add_row(
+            str(ref['number']),
+            ref['title'],
+            ref['source'],
+            clickable_link
+        )
+    
+    console.print(ref_table)
+    
+def display_document_references(references: list):
+    """Display document references with clickable links."""
+    if not references:
+        return
+    # Also display the full URLs separately for easy copying
+    console.print("\n[dim]References:[/dim]")
+    for ref in references:
+        console.print(f"[dim]{ref['number']}. {ref['url']}[/dim]")
 
 
 async def chat_loop():
@@ -99,6 +140,11 @@ async def chat_loop():
                 console.print("\n[bold green]📝 Answer:[/bold green]")
                 console.print(Markdown(result["answer"]))
                 
+                # Display document references if available
+                references = result["metadata"].get('document_references', [])
+                if references:
+                    display_document_references(references)
+                
                 # Display stats
                 console.print("\n" + "─" * 50)
                 display_stats(result["metadata"])
@@ -134,6 +180,11 @@ def main():
                 
                 console.print("\n[bold green]Answer:[/bold green]")
                 console.print(Markdown(result["answer"]))
+                
+                # Display document references if available
+                references = result["metadata"].get('document_references', [])
+                if references:
+                    display_document_references(references)
                 
                 display_stats(result["metadata"])
         
