@@ -15,10 +15,13 @@ when this module is imported by Alembic.
 
 # Import all models here
 from .documents import DocumentEntity
+from .chat_history import ChatSession, ChatMessage
 
 # Export all models for Alembic
 __all__ = [
     'DocumentEntity',
+    'ChatSession',
+    'ChatMessage',
 ]
 
 # Future models can be added here:
