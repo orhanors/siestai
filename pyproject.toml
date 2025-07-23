@@ -25,6 +25,7 @@ nats-py = "^2.10.0"
 fastapi = "^0.116.0"
 uvicorn = "^0.35.0"
 faststream = {extras = ["nats"], version = "^0.5.47"}
+langchain-community = "^0.3.27"
 
 [tool.poetry.scripts]
 memory-api = "start_memory_api:main"
