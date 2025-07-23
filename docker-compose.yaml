@@ -3,7 +3,7 @@ version: '3.8'
 services:
   pgvector:
     image: pgvector/pgvector:pg16
-    container_name: siestai_postgres
+    container_name: postgres_siestai
     environment:
       POSTGRES_DB: siestai_dev
       POSTGRES_USER: siestai_user
@@ -25,16 +25,21 @@ services:
     restart: unless-stopped
   neo4j:
     image: neo4j:latest
+    container_name: neo4j_siestai
     volumes:
         - /$HOME/neo4j/logs:/logs
         - /$HOME/neo4j/config:/config
         - /$HOME/neo4j/data:/data
         - /$HOME/neo4j/plugins:/plugins
     environment:
-        - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+        NEO4J_AUTH: neo4j/password
+        NEO4J_apoc_export_file_enabled: "true"
+        NEO4J_apoc_import_file_enabled: "true"
     ports:
       - "7474:7474"
       - "7687:7687"
+    networks:
+      - siestai_network
     restart: always
 
   nats:

@@ -29,6 +29,7 @@ faststream = {extras = ["nats"], version = "^0.5.47"}
 [tool.poetry.scripts]
 memory-api = "start_memory_api:main"
 database-ingest = "start_database_ingest:main"
+kg-ingest = "start_kg_ingest:main"
 
 [build-system]
 requires = ["poetry-core"]

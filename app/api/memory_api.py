@@ -139,10 +139,14 @@ async def publish_db_ingest_task(task: MemoryIngestDto):
 @app.post("/publish-kg-ingest")
 async def publish_kg_ingest_task(task: MemoryIngestDto):
     """Publish a knowledge graph ingestion task."""
-    api_logger.info(f"Publishing KG ingest task {task.id}")
-    await broker.publish(task, subject=KG_INGEST_SUBJECT)
-    api_logger.success(f"KG ingest task {task.id} published successfully")
-    return {"status": "ok", "id": task.id, "subject": KG_INGEST_SUBJECT}
+    try:
+        api_logger.info(f"Attempting to publish KG ingest task with source: {task.source}")
+        await broker.publish(task, subject=KG_INGEST_SUBJECT)
+        api_logger.info(f"Successfully published KG ingest task with source: {task.source}")
+        return {"status": "ok", "source": task.source, "subject": KG_INGEST_SUBJECT}
+    except Exception as e:
+        api_logger.error(f"Failed to publish KG ingest task with source: {task.source}, error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to publish task: {str(e)}")
 
 @app.get("/")
 async def root():
