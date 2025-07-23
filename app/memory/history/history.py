@@ -140,6 +140,45 @@ async def create_chat_session(
         return result["id"]
 
 
+async def create_chat_session_with_id(
+    session_id: str,
+    user_id: str,
+    profile_id: str,
+    session_name: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Create a new chat session with a specific ID.
+    
+    Args:
+        session_id: Specific session ID to use
+        user_id: User identifier
+        profile_id: Profile identifier within user
+        session_name: Optional session name
+        metadata: Additional session metadata
+    
+    Returns:
+        Session ID
+    """
+    async with chat_history_client.acquire() as conn:
+        result = await conn.fetchrow(
+            """
+            INSERT INTO chat_sessions (
+                id, user_id, profile_id, session_name, session_metadata
+            )
+            VALUES ($1::uuid, $2, $3, $4, $5::jsonb)
+            RETURNING id::text
+            """,
+            session_id,
+            user_id,
+            profile_id,
+            session_name,
+            json.dumps(metadata or {})
+        )
+        
+        return result["id"]
+
+
 async def get_chat_session(session_id: str) -> Optional[Dict[str, Any]]:
     """
     Get chat session by ID.

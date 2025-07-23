@@ -55,22 +55,49 @@ class ChatSession:
     async def initialize(self):
         """Initialize the session - create new or load existing."""
         if self.session_id:
-            # Load existing session
+            # Try to load existing session
             self._session_data = await get_chat_session(self.session_id)
-            if not self._session_data:
-                raise ValueError(f"Session {self.session_id} not found")
             
-            # Load recent messages
-            self._current_messages = await get_session_messages(
-                self.session_id,
-                limit=self.max_context_messages,
-                reverse_order=True
-            )
-            # Reverse to get chronological order
-            self._current_messages.reverse()
-            
+            if self._session_data:
+                # Session exists, load recent messages
+                self._current_messages = await get_session_messages(
+                    self.session_id,
+                    limit=self.max_context_messages,
+                    reverse_order=True
+                )
+                # Reverse to get chronological order
+                self._current_messages.reverse()
+            else:
+                # Session doesn't exist, create it with the provided ID
+                logger.info(f"Session {self.session_id} not found, creating new session with provided ID")
+                
+                # Import here to avoid circular imports
+                from .history import create_chat_session_with_id
+                
+                # Try to create session with specific ID
+                try:
+                    await create_chat_session_with_id(
+                        session_id=self.session_id,
+                        user_id=self.user_id,
+                        profile_id=self.profile_id,
+                        session_name=self.session_name,
+                        metadata={"created_by": "research_agent"}
+                    )
+                    self._session_data = await get_chat_session(self.session_id)
+                    self._current_messages = []
+                except Exception as e:
+                    # Fallback: create new session with auto-generated ID
+                    logger.warning(f"Could not create session with ID {self.session_id}: {e}")
+                    self.session_id = await create_chat_session(
+                        user_id=self.user_id,
+                        profile_id=self.profile_id,
+                        session_name=self.session_name,
+                        metadata={"created_by": "research_agent"}
+                    )
+                    self._session_data = await get_chat_session(self.session_id)
+                    self._current_messages = []
         else:
-            # Create new session
+            # Create new session with auto-generated ID
             self.session_id = await create_chat_session(
                 user_id=self.user_id,
                 profile_id=self.profile_id,
