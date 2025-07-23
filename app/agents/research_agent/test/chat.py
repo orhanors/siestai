@@ -3,6 +3,7 @@
 
 import asyncio
 import sys
+import time
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
@@ -16,6 +17,14 @@ load_dotenv()
 from app.agents.research_agent import ResearchAgent
 
 console = Console()
+
+
+def stream_text(text: str, delay: float = 0.01):
+    """Display text with a typewriter effect."""
+    for char in text:
+        console.print(char, end='', style="white")
+        time.sleep(delay)
+    console.print()  # Add newline at the end
 
 
 class StepTracker:
@@ -278,9 +287,9 @@ async def chat_loop():
                     session_id=session_id
                 )
                 
-                # Display answer
+                # Display answer with streaming effect
                 console.print("\n[bold green]📝 Answer:[/bold green]")
-                console.print(Markdown(result["answer"]))
+                stream_text(result["answer"])
                 
                 # Display document references if available
                 references = result["metadata"].get('document_references', [])
@@ -336,7 +345,7 @@ def main():
                 result = await agent.research(query)
                 
                 console.print("\n[bold green]Answer:[/bold green]")
-                console.print(Markdown(result["answer"]))
+                stream_text(result["answer"])
                 
                 # Display document references if available
                 references = result["metadata"].get('document_references', [])
