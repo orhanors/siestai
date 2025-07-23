@@ -316,15 +316,16 @@ class ChatSession:
     
     async def close_session(self):
         """Close the session and perform cleanup."""
-        # Update session activity
+        # Mark session as inactive
         if self.session_id:
-            await update_session_activity(self.session_id)
+            from .history import close_chat_session
+            await close_chat_session(self.session_id)
         
         # Clear in-memory cache
         self._current_messages.clear()
         self._session_data = None
         
-        logger.info(f"Closed chat session {self.session_id}")
+        logger.info(f"Closed chat session {self.session_id} and marked as inactive")
     
     @property
     def session_info(self) -> Dict[str, Any]:

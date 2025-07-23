@@ -235,6 +235,9 @@ async def chat_loop():
                 
                 # Handle commands
                 if query.lower() in ['quit', 'exit', 'q']:
+                    console.print("[yellow]Closing session and saying goodbye... 👋[/yellow]")
+                    # Close the current session before exiting
+                    await agent.close_current_session(user_id, profile_id, session_id)
                     console.print("[yellow]Goodbye! 👋[/yellow]")
                     break
                 

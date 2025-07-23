@@ -311,6 +311,28 @@ async def update_session_activity(session_id: str) -> bool:
         return result.split()[-1] != "0"
 
 
+async def close_chat_session(session_id: str) -> bool:
+    """
+    Mark a chat session as inactive and update its timestamp.
+    
+    Args:
+        session_id: Session UUID
+    
+    Returns:
+        True if updated successfully
+    """
+    async with chat_history_client.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE chat_sessions 
+            SET is_active = false, updated_at = NOW() 
+            WHERE id = $1::uuid
+            """,
+            session_id
+        )
+        return result.split()[-1] != "0"
+
+
 # Message Management Functions
 async def add_chat_message(
     session_id: str,

@@ -483,6 +483,12 @@ Please provide a comprehensive answer based on the available information.""")
         )
         
         try:
+            # Track last user info for session cleanup
+            if user_id and profile_id:
+                self._last_user_id = user_id
+                self._last_profile_id = profile_id
+                self._last_session_id = session_id
+            
             final_state = await self.graph.ainvoke(initial_state)
             
             # Store the query and response in chat history if memory is enabled
@@ -569,10 +575,39 @@ Please provide a comprehensive answer based on the available information.""")
         except Exception as e:
             logger.error(f"Error storing chat interaction: {e}")
     
+    async def close_current_session(
+        self, 
+        user_id: str, 
+        profile_id: str, 
+        session_id: Optional[str] = None
+    ):
+        """Close the current chat session if it exists."""
+        try:
+            if self.enable_memory:
+                # Get the session (don't create if it doesn't exist)
+                session_key = session_id or f"{user_id}_{profile_id}_new"
+                
+                # Check if session exists in memory manager
+                if session_key in self.memory_manager._active_sessions:
+                    session = self.memory_manager._active_sessions[session_key]
+                    await session.close_session()
+                    logger.info(f"Closed session {session.session_id} for user {user_id}/{profile_id}")
+                else:
+                    logger.info(f"No active session found for user {user_id}/{profile_id}")
+                    
+        except Exception as e:
+            logger.error(f"Error closing session: {e}")
+    
     async def __aenter__(self):
         """Async context manager entry."""
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
-        pass
+        # Close any active sessions when the agent context exits
+        if hasattr(self, '_last_user_id') and hasattr(self, '_last_profile_id'):
+            await self.close_current_session(
+                self._last_user_id, 
+                self._last_profile_id, 
+                getattr(self, '_last_session_id', None)
+            )

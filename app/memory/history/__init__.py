@@ -10,7 +10,9 @@ from .history import (
     get_session_messages,
     get_recent_context,
     search_similar_messages,
-    get_chat_statistics
+    get_chat_statistics,
+    update_session_activity,
+    close_chat_session
 )
 
 from .session_manager import (
@@ -30,6 +32,8 @@ __all__ = [
     "get_recent_context",
     "search_similar_messages",
     "get_chat_statistics",
+    "update_session_activity",
+    "close_chat_session",
     "ChatSession",
     "ChatMemoryManager", 
     "memory_manager"
