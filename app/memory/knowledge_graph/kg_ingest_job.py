@@ -3,13 +3,14 @@ import os
 import nats
 from nats.js.api import ConsumerConfig
 import json
+import asyncio
 from app.dto.memory_ingest_dto import MemoryIngestDto
 from app.utils.logger import get_logger
 from app.rawdata.document_fetcher import DocumentFetcher
 from app.types.document_types import DocumentSource, Credentials
 from app.dto.document_dto import FetchMetadata, PaginatedDocuments
 from app.memory.knowledge_graph.knowledge_graph import add_to_knowledge_graph, graph_client
-from app.utils.rate_limiter import RateLimitConfig
+from app.utils.rate_limiter import RateLimitConfig, global_rate_limiter
 from app.services.embedding_service import generate_document_embedding
 
 # Initialize logger
@@ -84,9 +85,16 @@ async def _save_data_to_knowledge_graph(fetch_result: PaginatedDocuments):
     # Initialize the graph client if needed
     await graph_client.initialize()
     
+    # Get rate limiter for knowledge graph operations (very conservative due to LLM API limits)
+    kg_rate_config = RateLimitConfig(requests_per_second=0.2, burst_size=2)  # 5 seconds between requests
+    kg_rate_limiter = global_rate_limiter.get_limiter("knowledge_graph_ingest", kg_rate_config)
+    
     # Store documents in knowledge graph
     for doc_data in fetch_result.documents:
         try:
+            # Apply rate limiting before each knowledge graph operation
+            await kg_rate_limiter.acquire()
+            
             # Generate embedding for document (optional, as Graphiti handles its own embeddings)
             embedding = await generate_document_embedding(doc_data)
             
@@ -100,26 +108,46 @@ async def _save_data_to_knowledge_graph(fetch_result: PaginatedDocuments):
             # Create episode ID from source and original_id
             episode_id = f"{doc_data.source.value}_{doc_data.original_id}"
             
-            # Add to knowledge graph using LangGraph/Graphiti
-            await add_to_knowledge_graph(
-                content=episode_content,
-                source=f"{doc_data.source.value} - {doc_data.content_url or 'No URL'}",
-                episode_id=episode_id,
-                metadata={
-                    "title": doc_data.title,
-                    "original_id": doc_data.original_id,
-                    "content_url": doc_data.content_url,
-                    "language": doc_data.language,
-                    "source_type": doc_data.source.value,
-                    "embedding_available": embedding is not None,
-                    **(doc_data.metadata if doc_data.metadata else {})
-                }
-            )
+            # Add to knowledge graph using LangGraph/Graphiti with retry logic
+            max_retries = 3
+            retry_count = 0
             
-            logger.document(f"Stored document in knowledge graph: {doc_data.title} (Episode ID: {episode_id})")
+            while retry_count < max_retries:
+                try:
+                    await add_to_knowledge_graph(
+                        content=episode_content,
+                        source=f"{doc_data.source.value} - {doc_data.content_url or 'No URL'}",
+                        episode_id=episode_id,
+                        metadata={
+                            "title": doc_data.title,
+                            "original_id": doc_data.original_id,
+                            "content_url": doc_data.content_url,
+                            "language": doc_data.language,
+                            "source_type": doc_data.source.value,
+                            "embedding_available": embedding is not None,
+                            **(doc_data.metadata if doc_data.metadata else {})
+                        }
+                    )
+                    
+                    logger.document(f"Stored document in knowledge graph: {doc_data.title} (Episode ID: {episode_id})")
+                    break  # Success, exit retry loop
+                    
+                except Exception as kg_error:
+                    retry_count += 1
+                    error_msg = str(kg_error).lower()
+                    
+                    if "rate limit" in error_msg and retry_count < max_retries:
+                        # Rate limit error - wait longer and retry
+                        wait_time = 10 * retry_count  # Exponential backoff: 10s, 20s, 30s
+                        logger.warning(f"Rate limit hit for {doc_data.title}, waiting {wait_time}s before retry {retry_count}/{max_retries}")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        # Non-rate-limit error or max retries reached
+                        logger.error(f"L Failed to store document {doc_data.title} in knowledge graph: {kg_error}")
+                        break
             
         except Exception as e:
-            logger.error(f"L Failed to store document {doc_data.title} in knowledge graph: {e}")
+            logger.error(f"L Failed to process document {doc_data.title} for knowledge graph: {e}")
 
 async def _send_next_batch_message(memory_ingest_dto: MemoryIngestDto, next_metadata: FetchMetadata):
     """Send message for next batch processing."""
