@@ -2,6 +2,7 @@
 
 import os
 import logging
+from datetime import datetime
 from typing import TypedDict, List, Optional, Dict, Any
 from langgraph.graph import StateGraph, START, END
 from langchain_openai import ChatOpenAI
@@ -202,8 +203,13 @@ class ResearchAgent:
                             "source": doc.get("source", "unknown")
                         })
             
+            # Get current date for temporal context
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            
             # Create the prompt
-            system_message = SystemMessage(content="""You are a research assistant that synthesizes information from multiple sources to provide comprehensive, accurate answers.
+            system_message = SystemMessage(content=f"""You are a research assistant that synthesizes information from multiple sources to provide comprehensive, accurate answers.
+
+Current date: {current_date}
 
 Instructions:
 1. Use the provided context from documents, knowledge graph, and web search results
@@ -212,7 +218,9 @@ Instructions:
 4. If information is conflicting, acknowledge this and explain
 5. If you don't have enough information, say so clearly
 6. Be concise but thorough
-7. When referencing documents from the knowledge base, you can refer to them by their titles""")
+7. When referencing documents from the knowledge base, you can refer to them by their titles
+8. Consider the current date when discussing recent events, trends, or time-sensitive information
+9. When web search results contain recent information, prioritize it over older documents for current events""")
             
             human_message = HumanMessage(content=f"""Question: {state['query']}
 
