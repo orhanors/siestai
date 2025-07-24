@@ -1,5 +1,5 @@
 # siestai
-Siestai agent that helps company workers to get their siesta
+SiestaI - an intelligent workplace wellness agent that guides employees through effective rest breaks and strategic napping for peak performance.
 
 ## Database Migrations
 
