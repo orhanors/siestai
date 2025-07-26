@@ -9,7 +9,10 @@ from typing import TypedDict, List, Optional, Dict, Any, Callable, Literal
 import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
-from .langgraph_compat import StateGraphCompat as StateGraph, START, END, MockPostgresCheckpointer as PostgresCheckpointer
+try:
+    from .langgraph_compat import StateGraphCompat as StateGraph, START, END, MockPostgresCheckpointer as PostgresCheckpointer
+except ImportError:
+    from langgraph_compat import StateGraphCompat as StateGraph, START, END, MockPostgresCheckpointer as PostgresCheckpointer
 from langchain_anthropic import ChatAnthropic
 from tavily import TavilyClient
 from langchain.schema import SystemMessage, HumanMessage
@@ -22,6 +25,8 @@ from mcp.client.session import ClientSession
 # Memory and chat history imports
 from app.memory.history.session_manager import ChatSession, memory_manager
 from app.services.embedding_service import get_embeddings
+from app.memory.database.database import vector_search
+from app.types.document_types import DocumentSource
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +42,11 @@ class C9SAgentState(TypedDict):
     # Tool results
     web_results: List[Dict[str, Any]]
     jira_results: List[Dict[str, Any]]
+    document_results: List[Dict[str, Any]]
     
     # Router decision
     next_action: Optional[str]
+    tools_to_call: Optional[List[str]]
     
     # Human-in-the-loop
     requires_human_input: bool
@@ -105,8 +112,86 @@ class C9SAgent:
         # Chat session management for long-term memory
         self.chat_sessions: Dict[str, ChatSession] = {}
         
+        # Cost tracking
+        self.total_cost = 0.0
+        self.cost_per_token = {
+            "claude-3-5-sonnet-20241022": {"input": 0.000003, "output": 0.000015},  # $3/M input, $15/M output
+            "claude-3-sonnet-20240229": {"input": 0.000003, "output": 0.000015},
+            "claude-3-opus-20240229": {"input": 0.000015, "output": 0.000075},  # $15/M input, $75/M output
+            "claude-3-haiku-20240307": {"input": 0.00000025, "output": 0.00000125},  # $0.25/M input, $1.25/M output
+        }
+        
         # Build the graph
         self.graph = self._build_graph()
+    
+    def _track_llm_cost(self, response, model: str = None):
+        """Track the cost of an LLM call."""
+        if not response:
+            return
+        
+        model = model or self.llm.model
+        if model not in self.cost_per_token:
+            logger.warning(f"Unknown model for cost tracking: {model}")
+            return
+        
+        # Try different ways to get usage information
+        usage = None
+        input_tokens = 0
+        output_tokens = 0
+        
+        # Method 1: Direct usage attribute
+        if hasattr(response, 'usage') and response.usage:
+            usage = response.usage
+            input_tokens = getattr(usage, 'prompt_tokens', 0)
+            output_tokens = getattr(usage, 'completion_tokens', 0)
+        
+        # Method 2: Response metadata
+        elif hasattr(response, 'response_metadata') and response.response_metadata:
+            metadata = response.response_metadata
+            if 'usage' in metadata:
+                usage_data = metadata['usage']
+                input_tokens = usage_data.get('prompt_tokens', 0)
+                output_tokens = usage_data.get('completion_tokens', 0)
+        
+        # Method 3: Direct attributes on response
+        elif hasattr(response, 'prompt_tokens') and hasattr(response, 'completion_tokens'):
+            input_tokens = response.prompt_tokens
+            output_tokens = response.completion_tokens
+        
+        # Method 4: Check for Anthropic specific structure
+        elif hasattr(response, 'content') and hasattr(response, 'usage'):
+            usage = response.usage
+            input_tokens = getattr(usage, 'input_tokens', 0)
+            output_tokens = getattr(usage, 'output_tokens', 0)
+        
+        # If we still don't have tokens, try to estimate from content length
+        if input_tokens == 0 and output_tokens == 0:
+            # Rough estimation: 1 token ≈ 4 characters
+            if hasattr(response, 'content'):
+                content_length = len(response.content)
+                output_tokens = max(1, content_length // 4)  # Estimate output tokens
+                input_tokens = max(1, output_tokens * 2)  # Estimate input tokens (usually longer)
+                logger.info(f"Estimated tokens from content length: input={input_tokens}, output={output_tokens}")
+        
+        if input_tokens > 0 or output_tokens > 0:
+            input_cost = input_tokens * self.cost_per_token[model]["input"]
+            output_cost = output_tokens * self.cost_per_token[model]["output"]
+            total_call_cost = input_cost + output_cost
+            
+            self.total_cost += total_call_cost
+            
+            logger.info(f"LLM call cost: ${total_call_cost:.6f} (input: {input_tokens}, output: {output_tokens})")
+            logger.info(f"Total cost so far: ${self.total_cost:.6f}")
+        else:
+            logger.warning("Could not determine token usage for cost tracking")
+    
+    def get_total_cost(self) -> float:
+        """Get the total cost of all LLM calls in this session."""
+        return self.total_cost
+    
+    def get_cost_summary(self) -> str:
+        """Get a formatted cost summary."""
+        return f"💰 Total LLM Cost: ${self.total_cost:.6f}"
     
     async def _get_or_create_chat_session(
         self,
@@ -219,6 +304,11 @@ class C9SAgent:
             system_message = SystemMessage(content="""
             You are a JQL (Jira Query Language) expert. Convert natural language queries into valid JQL.
             
+            IMPORTANT: 
+            1. Do NOT include LIMIT in the JQL query. LIMIT is handled by the API parameters, not the JQL itself.
+            2. Do NOT use ORDER BY with date fields like startDate, endDate, or sprint dates. These are not sortable in most JIRA instances.
+            3. Only use ORDER BY with standard fields like priority, created, updated, or summary.
+            
             Common JQL patterns:
             - assignee = 'username' (for specific assignee)
             - assignee = currentUser() (for current user)
@@ -227,15 +317,23 @@ class C9SAgent:
             - issuetype = Story (for stories)
             - sprint = 'sprint_name' (for specific sprint)
             - sprint in openSprints() (for current sprints)
+            - sprint in closedSprints() (for closed sprints)
             - status = 'status_name' (for specific status)
             - priority = 'priority_name' (for specific priority)
             - created >= -30d (for recent issues)
+            - project in projectsWhereUserHasPermission() (for accessible projects)
+            - status = Backlog (for backlog items)
+            - ORDER BY priority DESC, created DESC (for sorting)
             
             Examples:
             - "bugs assigned to Orhan" → "issuetype = Bug AND assignee = 'orhan.ors'"
             - "tasks in alt-J sprint" → "issuetype = Task AND sprint = 'alt-J'"
             - "high priority bugs" → "issuetype = Bug AND priority in (Highest, High)"
             - "my open tasks" → "assignee = currentUser() AND issuetype = Task AND status != Done"
+            - "top 5 items in the backlog" → "project in projectsWhereUserHasPermission() AND status = Backlog ORDER BY priority DESC, created DESC"
+            - "recent bugs" → "issuetype = Bug ORDER BY created DESC"
+            - "sprint issues" → "sprint in openSprints()"
+            - "closed sprint issues" → "sprint in closedSprints()"
             
             Return ONLY the JQL query, nothing else. If the query is unclear, default to "created >= -30d".
             """)
@@ -243,6 +341,7 @@ class C9SAgent:
             human_message = HumanMessage(content=f"Convert this query to JQL: {query}")
             
             response = await self.llm.ainvoke([system_message, human_message])
+            self._track_llm_cost(response)
             jql_query = response.content.strip()
             
             # Validate the JQL query
@@ -344,16 +443,39 @@ class C9SAgent:
             query = state["query"].lower()
             logger.info(f"🛣️ Routing query (lowercase): {query}")
             
-            # Simple routing logic based on keywords
+            # Define keyword categories
+            crypto_keywords = ["cryptobooks", "crypto books", "cryptocurrency", "bitcoin", "ethereum", "blockchain", "defi", "nft"]
             jira_keywords = ["jira", "ticket", "issue", "bug", "bugs", "task", "project", "sprint", "assignee", "assigned"]
             web_keywords = ["search", "find", "latest", "news", "current"]
             
-            if any(keyword in query for keyword in jira_keywords):
-                state["next_action"] = "jira_search"
-                logger.info(f"🛣️ Matched JIRA keywords, routing to jira_search")
-            elif any(keyword in query for keyword in web_keywords):
-                state["next_action"] = "web_search"
-                logger.info(f"🛣️ Matched web search keywords, routing to web_search")
+            # Check for keyword matches
+            has_crypto = any(keyword in query for keyword in crypto_keywords)
+            has_jira = any(keyword in query for keyword in jira_keywords)
+            has_web = any(keyword in query for keyword in web_keywords)
+            
+            # Smart routing - support multiple tools for comprehensive queries
+            tools_to_call = []
+            
+            if has_jira:
+                tools_to_call.append("jira_search")
+                logger.info(f"🛣️ JIRA keywords detected - will call jira_search")
+            
+            if has_crypto:
+                tools_to_call.append("document_search")
+                logger.info(f"🛣️ Crypto keywords detected - will call document_search")
+            
+            if has_web and not has_crypto:  # Only add web if not crypto (crypto prioritizes docs)
+                tools_to_call.append("web_search")
+                logger.info(f"🛣️ Web keywords detected - will call web_search")
+            
+            # Set the routing action based on detected tools
+            if len(tools_to_call) > 1:
+                state["next_action"] = "parallel_search"
+                state["tools_to_call"] = tools_to_call
+                logger.info(f"🛣️ Multiple tools detected, routing to parallel execution: {tools_to_call}")
+            elif len(tools_to_call) == 1:
+                state["next_action"] = tools_to_call[0]
+                logger.info(f"🛣️ Single tool detected, routing to: {tools_to_call[0]}")
             else:
                 # Use LLM to make routing decision
                 routing_prompt = f"""
@@ -369,6 +491,7 @@ class C9SAgent:
                 """
                 
                 response = await self.llm.ainvoke([HumanMessage(content=routing_prompt)])
+                self._track_llm_cost(response)
                 action = response.content.strip().lower()
                 
                 if action in ["jira_search", "web_search", "direct_answer"]:
@@ -406,8 +529,111 @@ class C9SAgent:
             
         return state
     
+    async def document_search(self, state: C9SAgentState) -> C9SAgentState:
+        """Search relevant documents using vector similarity."""
+        state["current_step"] = "document_search"
+        
+        try:
+            logger.info(f"Searching documents for: {state['query']}")
+            
+            # Generate embedding for the query
+            embeddings = get_embeddings()
+            query_embedding = await embeddings.aembed_query(state["query"])
+            
+            # Check if this is a crypto-related query for prioritization
+            query_lower = state["query"].lower()
+            crypto_keywords = ["cryptobooks", "crypto books", "cryptocurrency", "bitcoin", "ethereum", "blockchain", "defi", "nft"]
+            is_crypto_query = any(keyword in query_lower for keyword in crypto_keywords)
+            
+            if is_crypto_query:
+                # For crypto queries, use a lower threshold to get more results and prioritize them
+                logger.info("🔍 Crypto query detected - using enhanced document search")
+                document_results = await vector_search(
+                    embedding=query_embedding,
+                    limit=10,  # Get more results for crypto queries
+                    threshold=0.7,  # Lower threshold to catch more relevant docs
+                    source_filter=DocumentSource.INTERCOM_ARTICLE
+                )
+            else:
+                # Standard document search for non-crypto queries
+                document_results = await vector_search(
+                    embedding=query_embedding,
+                    limit=5,
+                    threshold=0.8,
+                    source_filter=DocumentSource.INTERCOM_ARTICLE
+                )
+            
+            state["document_results"] = document_results
+            logger.info(f"Retrieved {len(document_results)} relevant documents")
+            
+            # Log document titles for debugging
+            if document_results:
+                titles = [doc.get("title", "Untitled") for doc in document_results]
+                logger.info(f"Document titles: {titles}")
+                
+                if is_crypto_query:
+                    logger.info("📚 Crypto query - documents will be prioritized in synthesis")
+            
+        except Exception as e:
+            logger.error(f"Error in document search: {e}")
+            state["document_results"] = []
+            
+        return state
+    
+    async def parallel_search_coordinator(self, state: C9SAgentState) -> C9SAgentState:
+        """Coordinate parallel execution of multiple search tools."""
+        state["current_step"] = "parallel_search"
+        
+        try:
+            tools_to_call = state.get("tools_to_call", [])
+            logger.info(f"🔀 Starting parallel search with tools: {tools_to_call}")
+            
+            # Execute tools in parallel using asyncio.gather
+            tasks = []
+            
+            if "jira_search" in tools_to_call:
+                tasks.append(self.jira_search(state.copy()))
+            
+            if "document_search" in tools_to_call:
+                tasks.append(self.document_search(state.copy()))
+                
+            if "web_search" in tools_to_call:
+                tasks.append(self.web_search(state.copy()))
+            
+            # Execute all tasks in parallel
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Merge results from all parallel executions
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Error in parallel search: {result}")
+                        continue
+                    
+                    # Merge the results into the main state
+                    if result.get("jira_results"):
+                        state["jira_results"] = result["jira_results"]
+                    if result.get("document_results"):
+                        state["document_results"] = result["document_results"]
+                    if result.get("web_results"):
+                        state["web_results"] = result["web_results"]
+                
+                logger.info(f"🔀 Parallel search completed - merged results from {len([r for r in results if not isinstance(r, Exception)])} tools")
+            
+        except Exception as e:
+            logger.error(f"Error in parallel search coordination: {e}")
+            # Initialize empty results as fallback
+            if "jira_search" in tools_to_call and not state.get("jira_results"):
+                state["jira_results"] = []
+            if "document_search" in tools_to_call and not state.get("document_results"):
+                state["document_results"] = []
+            if "web_search" in tools_to_call and not state.get("web_results"):
+                state["web_results"] = []
+        
+        return state
+    
     async def jira_search(self, state: C9SAgentState) -> C9SAgentState:
-        """Search JIRA using MCP tools."""
+        """Search JIRA using MCP tools with smart tool selection."""
         state["current_step"] = "jira_search"
         
         logger.info(f"🔍 Starting JIRA search for query: {state['query']}")
@@ -420,6 +646,22 @@ class C9SAgent:
             state["jira_results"] = []
             return state
         
+        # Check for sprint queries and handle them with proper JIRA MCP tools
+        query_lower = state["query"].lower()
+        sprint_keywords = ["sprint", "latest sprint", "current sprint", "active sprint", "name of latest sprint", "latest sprint name", "sprint details", "last sprint", "sprint information"]
+        has_sprint_keywords = any(keyword in query_lower for keyword in sprint_keywords)
+        
+        if has_sprint_keywords:
+            logger.info("Sprint query detected, using JIRA MCP sprint tools")
+            sprint_results = await self._get_real_sprint_data(state["query"])
+            if sprint_results:
+                state["jira_results"] = sprint_results
+                logger.info(f"Retrieved {len(sprint_results)} sprint results from JIRA MCP")
+                return state
+            else:
+                logger.warning("Failed to get sprint data from JIRA MCP, continuing with standard search")
+                # Fall through to standard JIRA search instead of simulation
+        
         try:
             logger.info(f"Searching JIRA for: {state['query']}")
             
@@ -430,174 +672,50 @@ class C9SAgent:
                     # Fallback simulation code here
                     state["jira_results"] = self._simulate_jira_results(state["query"])
                 else:
+                    logger.info("Using real JIRA MCP client")
+                    logger.info(f"JIRA client config: {self.jira_client}")
                     # Use real MCP client
                     session = self.jira_client["session"]
                     tools = self.jira_client["tools"]
                     
-                    # Find the jira_search tool specifically
-                    search_tool = None
-                    for tool in tools:
-                        if tool.name == "jira_search":
-                            search_tool = tool
-                            break
+                    logger.info(f"🔧 Available tools: {[tool.name for tool in tools]}")
                     
-                    if search_tool:
-                        logger.info(f"Using MCP tool: {search_tool.name}")
-                        
-                        # Check if this is a specific ticket query
-                        query_lower = state["query"].lower()
-                        
-                        # Look for specific ticket numbers (e.g., CPT-4670)
-                        import re
-                        ticket_match = re.search(r'([A-Z]+-\d+)', state["query"].upper())
-                        
-                        if ticket_match:
-                            # This is a specific ticket query
-                            ticket_key = ticket_match.group(1)
-                            logger.info(f"Looking for specific ticket: {ticket_key}")
-                            
-                            # Use jira_get_issue tool if available
-                            get_issue_tool = None
-                            for tool in tools:
-                                if tool.name == "jira_get_issue":
-                                    get_issue_tool = tool
-                                    break
-                            
-                            if get_issue_tool:
-                                try:
-                                    issue_params = {"issue_key": ticket_key}
-                                    issue_result = await session.call_tool(get_issue_tool.name, issue_params)
-                                    
-                                    if issue_result.content:
-                                        # Parse the specific issue result
-                                        content_text = None
-                                        if hasattr(issue_result.content, 'text'):
-                                            content_text = issue_result.content.text
-                                        elif isinstance(issue_result.content, str):
-                                            content_text = issue_result.content
-                                        
-                                        if content_text:
-                                            try:
-                                                parsed_issue = json.loads(content_text)
-                                                if isinstance(parsed_issue, dict):
-                                                    # Normalize the issue data
-                                                    normalized_issue = {
-                                                        "key": parsed_issue.get("key", ticket_key),
-                                                        "summary": parsed_issue.get("summary", "No summary"),
-                                                        "status": parsed_issue.get("status", {}).get("name", "Unknown"),
-                                                        "assignee": parsed_issue.get("assignee", {}).get("display_name", "Unassigned") if parsed_issue.get("assignee") else "Unassigned",
-                                                        "type": parsed_issue.get("issue_type", {}).get("name", "Unknown"),
-                                                        "priority": parsed_issue.get("priority", {}).get("name", "Unknown"),
-                                                        "created": parsed_issue.get("created", ""),
-                                                        "updated": parsed_issue.get("updated", ""),
-                                                        "description": parsed_issue.get("description", ""),
-                                                        "comments": parsed_issue.get("comments", []),
-                                                        "attachments": parsed_issue.get("attachments", [])
-                                                    }
-                                                    state["jira_results"] = [normalized_issue]
-                                                    logger.info(f"Retrieved specific ticket: {ticket_key}")
-                                                    return state
-                                            except json.JSONDecodeError as e:
-                                                logger.warning(f"Could not parse specific issue result: {e}")
-                                
-                                except Exception as e:
-                                    logger.error(f"Error getting specific issue: {e}")
-                        
-                        # Generate JQL using AI
-                        jql_query = await self._generate_jql_from_natural_language(state["query"])
-                        
-                        # Prepare parameters for jira_search tool
-                        search_params = {
-                            "jql": jql_query,
-                            "fields": "key,summary,status,assignee,issuetype,priority,created,updated",
-                            "limit": 10
-                        }
-                        
-                        logger.info(f"Executing JIRA search with JQL: {jql_query}")
-                        
-                        # Execute MCP tool
+                    # Smart tool selection based on query analysis
+                    selected_tools = await self._select_appropriate_tools(state["query"], tools)
+                    logger.info(f"🎯 Selected tools: {selected_tools}")
+                    
+                    # Try tools in order of preference
+                    for tool_name, strategy in selected_tools:
                         try:
-                            result = await session.call_tool(search_tool.name, search_params)
-                            logger.info(f"JIRA search completed successfully")
-                        except Exception as e:
-                            logger.error(f"JIRA search failed: {e}")
-                            result = None
-                        
-                        if result.content:
-                            # Get the content text regardless of type
-                            content_text = None
-                            if hasattr(result.content, 'text'):
-                                content_text = result.content.text
-                            elif hasattr(result.content, 'type') and result.content.type == 'text':
-                                content_text = str(result.content)
-                            elif isinstance(result.content, str):
-                                content_text = result.content
-                            elif isinstance(result.content, list):
-                                # Handle list of content items
-                                for item in result.content:
-                                    if hasattr(item, 'text'):
-                                        content_text = item.text
-                                        break
-                                    elif isinstance(item, str):
-                                        content_text = item
-                                        break
+                            logger.info(f"🔧 Trying tool: {tool_name} with strategy: {strategy}")
+                            result = await self._execute_tool_with_strategy(session, tool_name, strategy, state["query"])
                             
-                            if content_text:
-                                try:
-                                    parsed = json.loads(content_text)
-                                    if isinstance(parsed, dict) and "issues" in parsed:
-                                        # Extract issues from the response
-                                        issues = parsed.get("issues", [])
-                                        total_results = parsed.get("total", 0)
-                                        
-                                        # Check if we got no results and this is a JIRA search
-                                        if total_results == 0 and len(issues) == 0:
-                                            logger.info(f"No JIRA results found for query: {state['query']}")
-                                            logger.info(f"JQL used: {jql_query}")
-                                            
-                                            # Ask user if they want to refine their query
-                                            state["requires_human_input"] = True
-                                            state["human_feedback"] = f"No JIRA issues found for your query. The search used: {jql_query}\n\nWould you like to refine your search? Please provide an updated query or say 'NO' to stop searching."
-                                            state["query_refinement_mode"] = True
-                                            state["original_query"] = state["query"]
-                                            state["current_jql"] = jql_query
-                                            return state
-                                        
-                                        for issue in issues:
-                                            if isinstance(issue, dict):
-                                                # Normalize the issue data
-                                                normalized_issue = {
-                                                    "key": issue.get("key", "N/A"),
-                                                    "summary": issue.get("summary", "No summary"),
-                                                    "status": issue.get("status", {}).get("name", "Unknown"),
-                                                    "assignee": issue.get("assignee", {}).get("display_name", "Unassigned") if issue.get("assignee") else "Unassigned",
-                                                    "type": issue.get("issue_type", {}).get("name", "Unknown"),
-                                                    "priority": issue.get("priority", {}).get("name", "Unknown"),
-                                                    "created": issue.get("created", ""),
-                                                    "updated": issue.get("updated", "")
-                                                }
-                                                state["jira_results"].append(normalized_issue)
-                                    elif isinstance(parsed, list):
-                                        state["jira_results"].extend(parsed)
-                                    else:
-                                        state["jira_results"].append(parsed)
-                                except json.JSONDecodeError as e:
-                                    logger.warning(f"Could not parse MCP result as JSON: {e}")
-                                    logger.warning(f"Raw content: {content_text[:200]}...")
-                                    logger.warning(f"Content type: {type(result.content)}")
+                            if result and result.get("success", False):
+                                state["jira_results"] = result.get("data", [])
+                                logger.info(f"✅ Success with tool {tool_name}: {len(state['jira_results'])} results")
+                                return state
                             else:
-                                logger.warning(f"Could not extract text content from MCP result: {type(result.content)}")
-                                logger.warning(f"Content: {result.content}")
-                            
-                            state["jira_results"] = state["jira_results"][:10]  # Limit results
-                            logger.info(f"Retrieved {len(state['jira_results'])} JIRA results via MCP")
-                        else:
-                            logger.warning("No content in MCP result")
-                            state["jira_results"] = []
+                                logger.warning(f"❌ Tool {tool_name} failed: {result.get('error', 'Unknown error')}")
+                                
+                        except Exception as e:
+                            logger.error(f"❌ Error with tool {tool_name}: {e}")
+                            continue
+                    
+                    # If all tools failed, try fallback strategies
+                    logger.info("🔄 All primary tools failed, trying fallback strategies")
+                    fallback_result = await self._try_fallback_strategies(session, tools, state["query"])
+                    
+                    if fallback_result:
+                        state["jira_results"] = fallback_result
+                        logger.info(f"✅ Fallback successful: {len(fallback_result)} results")
                     else:
-                        logger.warning("No suitable JIRA search tool found in MCP")
-                        # Fallback to simulation
-                        state["jira_results"] = self._simulate_jira_results(state["query"])
+                        # No results found - trigger human-in-the-loop for query refinement
+                        logger.info("❌ No results found, triggering query refinement")
+                        state["requires_human_input"] = True
+                        state["human_feedback"] = f"No JIRA issues found for your query: '{state['query']}'. The search tried multiple strategies but couldn't find any matching issues.\n\nWould you like to:\n1. Refine your search terms\n2. Check available projects first\n3. Try a different approach\n\nPlease provide an updated query or say 'NO' to stop searching."
+                        state["query_refinement_mode"] = True
+                        state["original_query"] = state["query"]
+                        return state
             else:
                 logger.warning("JIRA client not properly configured")
                 state["jira_results"] = []
@@ -608,9 +726,482 @@ class C9SAgent:
             
         return state
     
+    async def _select_appropriate_tools(self, query: str, tools: list) -> list:
+        """Select appropriate tools based on query analysis using React/Reflexion pattern."""
+        query_lower = query.lower()
+        
+        # Analyze query intent
+        intent_analysis = {
+            "project_query": any(word in query_lower for word in ["project", "projects", "list projects"]),
+            "bug_query": any(word in query_lower for word in ["bug", "bugs", "error", "issue", "problem"]),
+            "task_query": any(word in query_lower for word in ["task", "tasks", "latest tasks", "recent tasks", "current tasks", "active tasks"]),
+            "specific_issue": bool(re.search(r'[A-Z]+-\d+', query)),
+            "sprint_query": any(word in query_lower for word in ["sprint", "sprints"]),
+            "board_query": any(word in query_lower for word in ["board", "boards"]),
+            "user_query": any(word in query_lower for word in ["user", "assignee", "assigned to"]),
+            "search_query": any(word in query_lower for word in ["search", "find", "look for", "show me", "what are", "latest", "recent", "current"])
+        }
+        
+        logger.info(f"🔍 Query intent analysis: {intent_analysis}")
+        
+        # Tool selection strategies based on intent
+        tool_strategies = []
+        
+        # 1. Task-related queries (highest priority for task queries)
+        if intent_analysis["task_query"]:
+            tool_strategies.extend([
+                ("jira_search", "Search for tasks with JQL"),
+                ("jira_get_project_issues", "Get all issues from projects")
+            ])
+        
+        # 2. Bug/Issue queries
+        elif intent_analysis["bug_query"]:
+            tool_strategies.extend([
+                ("jira_search", "Search for bugs with JQL"),
+                ("jira_get_project_issues", "Get all issues from projects")
+            ])
+        
+        # 3. Project-related queries
+        elif intent_analysis["project_query"]:
+            tool_strategies.extend([
+                ("jira_get_all_projects", "List all available projects"),
+                ("jira_get_project_issues", "Get issues from specific project")
+            ])
+        
+        # Look for specific issue queries
+        if intent_analysis["specific_issue"]:
+            tool_strategies.extend([
+                ("jira_get_issue", "Get specific issue details"),
+                ("jira_search", "Search for specific issue with JQL")
+            ])
+        
+        # Check for sprint-specific task queries (e.g., "alt-J sprint tasks")
+        if "sprint" in query_lower and any(word in query_lower for word in ["task", "tasks", "issue", "issues", "ticket", "tickets"]):
+            tool_strategies.extend([
+                ("jira_search", "Search for issues within specific sprint"),
+                ("jira_get_agile_boards", "Get boards to find sprint issues")
+            ])
+        
+        # 4. Sprint queries
+        elif intent_analysis["sprint_query"]:
+            tool_strategies.extend([
+                ("jira_get_agile_boards", "Get boards first"),
+                ("jira_get_sprints_from_board", "Get sprints from boards")
+            ])
+        
+        # 5. Board queries
+        elif intent_analysis["board_query"]:
+            tool_strategies.extend([
+                ("jira_get_agile_boards", "Get all boards"),
+                ("jira_get_board_issues", "Get issues from boards")
+            ])
+        
+        # 6. User queries
+        elif intent_analysis["user_query"]:
+            tool_strategies.extend([
+                ("jira_search", "Search by assignee"),
+                ("jira_get_user_profile", "Get user profile")
+            ])
+        
+        # 7. General search queries
+        elif intent_analysis["search_query"]:
+            tool_strategies.extend([
+                ("jira_search", "General JQL search"),
+                ("jira_get_all_projects", "List projects as fallback")
+            ])
+        
+        # Default fallback
+        if not tool_strategies:
+            tool_strategies.extend([
+                ("jira_search", "General search for tasks and issues"),
+                ("jira_get_all_projects", "List projects as fallback")
+            ])
+        
+        return tool_strategies
+    
+    async def _execute_tool_with_strategy(self, session, tool_name: str, strategy: str, query: str) -> dict:
+        """Execute a tool with appropriate strategy and parameters."""
+        try:
+            logger.info(f"🔧 Executing {tool_name} with strategy: {strategy}")
+            
+            if tool_name == "jira_get_all_projects":
+                # Get all projects first
+                result = await session.call_tool(tool_name, {"include_archived": False})
+                return self._parse_tool_result(result, "projects")
+            
+            elif tool_name == "jira_search":
+                # Generate smart JQL based on query
+                jql_query = await self._generate_smart_jql(query)
+                logger.info(f"🔍 Generated JQL: {jql_query}")
+                
+                # Check if this is a specific ticket query
+                ticket_match = re.search(r'\b([A-Z]+-\d+)\b', query.upper())
+                is_specific_ticket = ticket_match is not None
+                
+                if is_specific_ticket:
+                    # Request detailed fields for specific ticket queries
+                    search_params = {
+                        "jql": jql_query,
+                        "fields": "key,summary,status,assignee,issuetype,priority,created,updated,project,description,comment,attachment",
+                        "limit": 1
+                    }
+                    logger.info(f"🔍 Specific ticket query detected, using detailed fields")
+                else:
+                    # Standard fields for general searches
+                    search_params = {
+                        "jql": jql_query,
+                        "fields": "key,summary,status,assignee,issuetype,priority,created,updated,project",
+                        "limit": 10
+                    }
+                
+                result = await session.call_tool(tool_name, search_params)
+                return self._parse_tool_result(result, "search")
+            
+            elif tool_name == "jira_get_issue":
+                # Extract issue key from query
+                issue_match = re.search(r'([A-Z]+-\d+)', query.upper())
+                if issue_match:
+                    issue_key = issue_match.group(1)
+                    logger.info(f"🔍 Getting detailed information for issue: {issue_key}")
+                    result = await session.call_tool(tool_name, {"issue_key": issue_key})
+                    return self._parse_tool_result(result, "issue")
+                else:
+                    return {"success": False, "error": "No issue key found in query"}
+            
+            elif tool_name == "jira_get_agile_boards":
+                # Get boards first
+                result = await session.call_tool(tool_name, {})
+                return self._parse_tool_result(result, "boards")
+            
+            elif tool_name == "jira_get_sprints_from_board":
+                # Get sprints from first available board
+                boards_result = await session.call_tool("jira_get_agile_boards", {})
+                boards_data = self._parse_tool_result(boards_result, "boards")
+                
+                if boards_data.get("success") and boards_data.get("data"):
+                    board_id = boards_data["data"][0].get("id")
+                    if board_id:
+                        result = await session.call_tool(tool_name, {"board_id": str(board_id), "state": "active"})
+                        return self._parse_tool_result(result, "sprints")
+                
+                return {"success": False, "error": "No boards available"}
+            
+            else:
+                # Generic tool execution
+                result = await session.call_tool(tool_name, {})
+                return self._parse_tool_result(result, "generic")
+                
+        except Exception as e:
+            logger.error(f"❌ Error executing {tool_name}: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _generate_smart_jql(self, query: str) -> str:
+        """Generate smart JQL that avoids common errors."""
+        query_lower = query.lower()
+        
+        # Extract key information from query
+        project_key = None
+        issue_type = None
+        assignee = None
+        status = None
+        ticket_key = None
+        
+        # Look for specific ticket ID (e.g., CPT-4670, CPT-4671)
+        ticket_match = re.search(r'\b([A-Z]+-\d+)\b', query.upper())
+        if ticket_match:
+            ticket_key = ticket_match.group(1)
+            logger.info(f"🔍 Extracted ticket key: {ticket_key}")
+        
+        # Look for project mentions - be more careful about extraction
+        # Only extract if it looks like a real project key (2-5 uppercase letters)
+        # But exclude common words that are often mistaken for project keys
+        common_words = ["WHAT", "SHOW", "ALL", "THE", "AND", "FOR", "ABOUT", "WITH", "FROM", "INTO", "UPON", "UNDER", "OVER", "BETWEEN", "AMONG", "DURING", "BEFORE", "AFTER", "SINCE", "UNTIL", "WHILE", "WHERE", "WHEN", "WHY", "HOW", "NEXT", "LAST", "CURRENT", "PREVIOUS", "LATEST", "RECENT", "OLDER", "NEWER", "BEST", "WORST", "HIGH", "LOW", "OPEN", "CLOSED", "ACTIVE", "INACTIVE", "PENDING", "RESOLVED", "ASSIGNED", "UNASSIGNED", "BUGS", "TASKS", "ISSUES", "PROJECTS", "FIND"]
+        
+        project_match = re.search(r'\b([A-Z]{2,5})\b', query.upper())
+        if project_match:
+            potential_project = project_match.group(1)
+            
+            if potential_project not in common_words:
+                project_key = potential_project
+                logger.info(f"🔍 Extracted project key: {project_key}")
+            else:
+                logger.info(f"🔍 Ignored common word as project key: {potential_project}")
+        
+        # Look for issue types
+        if "bug" in query_lower:
+            issue_type = "Bug"
+        elif "task" in query_lower:
+            issue_type = "Task"
+        elif "story" in query_lower:
+            issue_type = "Story"
+        elif "epic" in query_lower:
+            issue_type = "Epic"
+        
+        # Look for sprint mentions first
+        sprint_name = None
+        if "alt-j" in query_lower:
+            sprint_name = "alt-J"
+        
+        # Look for assignee mentions
+        if "nextgen" in query_lower:
+            # This might be a project name, not an assignee
+            pass
+        elif "orhan" in query_lower:
+            # Use the actual name format from JIRA data
+            assignee = "Orhan Örs"
+        elif "luca" in query_lower and "cardelli" in query_lower:
+            # Handle Luca Cardelli
+            assignee = "Luca Cardelli"
+        
+        # Look for status mentions
+        if "not done" in query_lower or "not completed" in query_lower:
+            status = "not_done"
+        elif "done" in query_lower or "completed" in query_lower:
+            status = "done"
+        elif "code review" in query_lower:
+            status = "code_review"
+        elif "in progress" in query_lower:
+            status = "in_progress"
+        
+        # Build JQL step by step
+        jql_parts = []
+        
+        # If we have a specific ticket key, prioritize that
+        if ticket_key:
+            jql_parts.append(f'key = "{ticket_key}"')
+        else:
+            # For task queries, prioritize recent and active tasks
+            if "task" in query_lower or "latest" in query_lower or "recent" in query_lower:
+                # Start with recent tasks - be more flexible
+                jql_parts.append("created >= -30d")
+                
+                # Only add task type if explicitly mentioned and no other types
+                if "task" in query_lower and not any(word in query_lower for word in ["bug", "story", "epic"]):
+                    # But don't force it - let it find any recent issues
+                    pass
+                
+                # Be more flexible with status - don't exclude too many
+                # Only exclude very final statuses
+                jql_parts.append("status != Closed")
+            else:
+                # Start with a safe base query - only if we have a valid project
+                if project_key:
+                    jql_parts.append(f'project = "{project_key}"')
+                else:
+                    # If no specific project, use a broader search
+                    jql_parts.append("created >= -30d")  # Recent issues
+            
+            # Add issue type filter only if we have a specific type and it's not a general task query
+            if issue_type and not ("task" in query_lower and not any(word in query_lower for word in ["bug", "story", "epic"])):
+                jql_parts.append(f'issuetype = {issue_type}')
+            
+            # Add sprint filter (high priority for sprint-specific queries)
+            if sprint_name:
+                jql_parts.append(f'sprint = "{sprint_name}"')
+            
+            # Add assignee filter
+            if assignee:
+                jql_parts.append(f'assignee = "{assignee}"')
+            
+            # Add status filter based on query
+            if status == "not_done":
+                jql_parts.append("status != Done")
+                jql_parts.append("status != Closed")
+            elif status == "done":
+                jql_parts.append("status = Done")
+            elif status == "code_review":
+                jql_parts.append("status = 'Code Review'")
+            elif status == "in_progress":
+                jql_parts.append("status = 'In Progress'")
+            
+            # If we have no specific filters, add a broader search
+            if len(jql_parts) == 0:
+                jql_parts.append("created >= -30d")
+        
+        # Combine with AND
+        jql = " AND ".join(jql_parts)
+        
+        # Add ordering - for tasks, order by priority and creation date
+        if "task" in query_lower:
+            jql += " ORDER BY priority DESC, created DESC"
+        else:
+            jql += " ORDER BY created DESC"
+        
+        logger.info(f"🔍 Generated smart JQL: {jql}")
+        return jql
+    
+    def _parse_tool_result(self, result, result_type: str) -> dict:
+        """Parse tool result and extract data."""
+        try:
+            if not result or not result.content:
+                return {"success": False, "error": "No content in result"}
+            
+            # Extract content text
+            content_text = None
+            if hasattr(result.content, 'text'):
+                content_text = result.content.text
+            elif isinstance(result.content, str):
+                content_text = result.content
+            elif isinstance(result.content, list) and len(result.content) > 0:
+                item = result.content[0]
+                if hasattr(item, 'text'):
+                    content_text = item.text
+                elif isinstance(item, str):
+                    content_text = item
+            
+            if not content_text:
+                return {"success": False, "error": "Could not extract content text"}
+            
+            # Parse JSON
+            try:
+                parsed = json.loads(content_text)
+            except json.JSONDecodeError:
+                return {"success": False, "error": f"Could not parse JSON: {content_text[:200]}..."}
+            
+            # Extract data based on result type
+            if result_type == "search":
+                if isinstance(parsed, dict) and "issues" in parsed:
+                    issues = parsed.get("issues", [])
+                    return {
+                        "success": True,
+                        "data": [self._normalize_issue(issue) for issue in issues],
+                        "total": parsed.get("total", 0)
+                    }
+                else:
+                    return {"success": False, "error": "No issues found in search result"}
+            
+            elif result_type == "projects":
+                if isinstance(parsed, list):
+                    return {
+                        "success": True,
+                        "data": [self._normalize_project(project) for project in parsed]
+                    }
+                else:
+                    return {"success": False, "error": "No projects found"}
+            
+            elif result_type == "issue":
+                if isinstance(parsed, dict):
+                    return {
+                        "success": True,
+                        "data": [self._normalize_issue(parsed)]
+                    }
+                else:
+                    return {"success": False, "error": "Invalid issue data"}
+            
+            elif result_type == "boards":
+                if isinstance(parsed, list):
+                    return {
+                        "success": True,
+                        "data": [self._normalize_board(board) for board in parsed]
+                    }
+                else:
+                    return {"success": False, "error": "No boards found"}
+            
+            elif result_type == "sprints":
+                if isinstance(parsed, list):
+                    return {
+                        "success": True,
+                        "data": [self._normalize_sprint(sprint) for sprint in parsed]
+                    }
+                else:
+                    return {"success": False, "error": "No sprints found"}
+            
+            else:
+                # Generic parsing
+                return {
+                    "success": True,
+                    "data": parsed if isinstance(parsed, list) else [parsed]
+                }
+                
+        except Exception as e:
+            logger.error(f"Error parsing {result_type} result: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _normalize_issue(self, issue: dict) -> dict:
+        """Normalize issue data structure."""
+        normalized = {
+            "key": issue.get("key", "N/A"),
+            "summary": issue.get("summary", "No summary"),
+            "status": issue.get("status", {}).get("name", "Unknown") if isinstance(issue.get("status"), dict) else issue.get("status", "Unknown"),
+            "assignee": issue.get("assignee", {}).get("display_name", "Unassigned") if issue.get("assignee") else "Unassigned",
+            "type": issue.get("issue_type", {}).get("name", "Unknown") if isinstance(issue.get("issue_type"), dict) else issue.get("type", "Unknown"),
+            "priority": issue.get("priority", {}).get("name", "Unknown") if isinstance(issue.get("priority"), dict) else issue.get("priority", "Unknown"),
+            "created": issue.get("created", ""),
+            "updated": issue.get("updated", ""),
+            "project": issue.get("project", {}).get("key", "Unknown") if isinstance(issue.get("project"), dict) else issue.get("project", "Unknown")
+        }
+        
+        # Add detailed information if available
+        if issue.get("description"):
+            normalized["description"] = issue["description"]
+        
+        if issue.get("comments"):
+            normalized["comments"] = issue["comments"]
+        
+        if issue.get("attachments"):
+            normalized["attachments"] = issue["attachments"]
+        
+        return normalized
+    
+    def _normalize_project(self, project: dict) -> dict:
+        """Normalize project data structure."""
+        return {
+            "key": project.get("key", "N/A"),
+            "name": project.get("name", "Unknown"),
+            "id": project.get("id", "Unknown"),
+            "projectTypeKey": project.get("projectTypeKey", "Unknown")
+        }
+    
+    def _normalize_board(self, board: dict) -> dict:
+        """Normalize board data structure."""
+        return {
+            "id": board.get("id", "N/A"),
+            "name": board.get("name", "Unknown"),
+            "type": board.get("type", "Unknown"),
+            "projectKey": board.get("projectKey", "Unknown")
+        }
+    
+    def _normalize_sprint(self, sprint: dict) -> dict:
+        """Normalize sprint data structure."""
+        return {
+            "id": sprint.get("id", "N/A"),
+            "name": sprint.get("name", "Unknown"),
+            "state": sprint.get("state", "Unknown"),
+            "startDate": sprint.get("startDate"),
+            "endDate": sprint.get("endDate"),
+            "goal": sprint.get("goal", ""),
+            "boardId": sprint.get("boardId", "Unknown")
+        }
+    
+    async def _try_fallback_strategies(self, session, tools: list, query: str) -> list:
+        """Try fallback strategies when primary tools fail."""
+        logger.info("🔄 Trying fallback strategies")
+        
+        fallback_strategies = [
+            ("jira_get_all_projects", "List all projects to understand available data"),
+            ("jira_search", "Try with simplified JQL: created >= -30d"),
+            ("jira_get_agile_boards", "Get boards to understand structure")
+        ]
+        
+        for tool_name, strategy in fallback_strategies:
+            try:
+                logger.info(f"🔄 Fallback: {tool_name} - {strategy}")
+                result = await self._execute_tool_with_strategy(session, tool_name, strategy, query)
+                
+                if result.get("success") and result.get("data"):
+                    logger.info(f"✅ Fallback {tool_name} succeeded")
+                    return result["data"]
+                    
+            except Exception as e:
+                logger.error(f"❌ Fallback {tool_name} failed: {e}")
+                continue
+        
+        return []
+    
     def _simulate_jira_results(self, query: str) -> list:
         """Simulate JIRA results for fallback when MCP is not available."""
         query_lower = query.lower()
+        logger.info(f"🔧 Simulating JIRA results for query: '{query}'")
         mock_results = []
         
         if any(keyword in query_lower for keyword in ["bug", "error", "issue", "problem"]):
@@ -638,6 +1229,46 @@ class C9SAgent:
                 {"key": "HIGH-002", "summary": "Performance degradation", "status": "Open", "type": "Bug", "assignee": "DevOps Team"}
             ])
         
+        # Handle sprint queries
+        if any(keyword in query_lower for keyword in ["sprint", "latest sprint", "current sprint", "active sprint", "name of latest sprint", "sprint details", "last sprint", "sprint information"]):
+            # Check if user wants multiple sprints
+            if any(word in query_lower for word in ["last 2", "last 3", "last 4", "last 5", "multiple", "several"]):
+                mock_results = [
+                    {
+                        "type": "sprint",
+                        "name": "Sprint 15 - Q4 2024",
+                        "id": "10015",
+                        "state": "active",
+                        "startDate": "2024-10-15T00:00:00.000+0000",
+                        "endDate": "2024-10-29T23:59:59.000+0000",
+                        "goal": "Complete CRM integration and fix critical bugs",
+                        "board_id": "1001"
+                    },
+                    {
+                        "type": "sprint",
+                        "name": "Sprint 14 - Q4 2024",
+                        "id": "10014",
+                        "state": "closed",
+                        "startDate": "2024-10-01T00:00:00.000+0000",
+                        "endDate": "2024-10-14T23:59:59.000+0000",
+                        "goal": "Implement new dashboard features and bug fixes",
+                        "board_id": "1001"
+                    }
+                ]
+            else:
+                mock_results = [
+                    {
+                        "type": "sprint",
+                        "name": "Sprint 15 - Q4 2024",
+                        "id": "10015",
+                        "state": "active",
+                        "startDate": "2024-10-15T00:00:00.000+0000",
+                        "endDate": "2024-10-29T23:59:59.000+0000",
+                        "goal": "Complete CRM integration and fix critical bugs",
+                        "board_id": "1001"
+                    }
+                ]
+        
         # If no specific keywords, return general results
         if not mock_results:
             mock_results = [
@@ -646,6 +1277,118 @@ class C9SAgent:
             ]
         
         return mock_results[:5]  # Limit to 5 results
+    
+    async def _get_real_sprint_data(self, query: str) -> List[Dict[str, Any]]:
+        """Get real sprint data using JIRA MCP tools."""
+        try:
+            if not self.jira_client or not self.jira_client.get("configured"):
+                logger.warning("JIRA MCP client not configured for sprint data")
+                return []
+            
+            if self.jira_client.get("simulation"):
+                logger.warning("JIRA client in simulation mode, cannot get real sprint data")
+                return []
+            
+            session = self.jira_client["session"]
+            tools = self.jira_client["tools"]
+            
+            logger.info("🔍 Getting real sprint data from JIRA MCP")
+            
+            # First, get agile boards
+            boards_result = await session.call_tool("jira_get_agile_boards", {})
+            boards_data = self._parse_tool_result(boards_result, "boards")
+            
+            if not boards_data.get("success") or not boards_data.get("data"):
+                logger.warning("No agile boards found")
+                return []
+            
+            # Get sprints from all available boards and their tasks
+            all_results = []
+            query_lower = query.lower()
+            
+            for board in boards_data["data"]:
+                board_id = board.get("id")
+                if board_id:
+                    try:
+                        # Get active sprints
+                        active_sprints_result = await session.call_tool(
+                            "jira_get_sprints_from_board", 
+                            {"board_id": str(board_id), "state": "active"}
+                        )
+                        active_sprints_data = self._parse_tool_result(active_sprints_result, "sprints")
+                        
+                        if active_sprints_data.get("success") and active_sprints_data.get("data"):
+                            for sprint in active_sprints_data["data"]:
+                                sprint_name = sprint.get("name", "").lower()
+                                
+                                # Check if this is the sprint the user is asking about
+                                if "alt-j" in query_lower and "alt-j" in sprint_name:
+                                    logger.info(f"Found matching alt-J sprint: {sprint.get('name')}")
+                                    
+                                    # Get issues in this specific sprint using JQL
+                                    sprint_jql = f'sprint = "{sprint.get("name")}"'
+                                    
+                                    try:
+                                        sprint_issues_result = await session.call_tool(
+                                            "jira_search",
+                                            {
+                                                "jql": sprint_jql,
+                                                "fields": "key,summary,status,assignee,issuetype,priority,created,updated,project",
+                                                "limit": 20
+                                            }
+                                        )
+                                        
+                                        sprint_issues_data = self._parse_tool_result(sprint_issues_result, "search")
+                                        
+                                        if sprint_issues_data.get("success") and sprint_issues_data.get("data"):
+                                            logger.info(f"Found {len(sprint_issues_data['data'])} issues in {sprint.get('name')}")
+                                            # Add the actual issues instead of sprint metadata
+                                            for issue in sprint_issues_data["data"]:
+                                                issue["sprint_name"] = sprint.get("name")
+                                                issue["sprint_state"] = sprint.get("state") 
+                                                issue["board_name"] = board.get("name", "Unknown Board")
+                                                all_results.append(issue)
+                                        else:
+                                            logger.warning(f"No issues found in sprint {sprint.get('name')}")
+                                    
+                                    except Exception as e:
+                                        logger.error(f"Error getting issues for sprint {sprint.get('name')}: {e}")
+                                
+                                # Also add sprint info if it matches general sprint queries
+                                elif not ("alt-j" in query_lower) or not ("task" in query_lower):
+                                    sprint["type"] = "sprint"
+                                    sprint["board_name"] = board.get("name", "Unknown Board")
+                                    all_results.append(sprint)
+                        
+                        # For non-specific queries, also get closed sprints
+                        if not ("alt-j" in query_lower and "task" in query_lower):
+                            closed_sprints_result = await session.call_tool(
+                                "jira_get_sprints_from_board",
+                                {"board_id": str(board_id), "state": "closed"}
+                            )
+                            closed_sprints_data = self._parse_tool_result(closed_sprints_result, "sprints")
+                            
+                            if closed_sprints_data.get("success") and closed_sprints_data.get("data"):
+                                # Only add the most recent closed sprints
+                                for sprint in closed_sprints_data["data"][:2]:  # Limit to 2 most recent
+                                    sprint["type"] = "sprint"
+                                    sprint["board_name"] = board.get("name", "Unknown Board")
+                                    all_results.append(sprint)
+                                
+                    except Exception as e:
+                        logger.error(f"Error getting sprints for board {board_id}: {e}")
+                        continue
+            
+            if all_results:
+                logger.info(f"Successfully retrieved {len(all_results)} sprint-related results from JIRA MCP")
+                return all_results
+            else:
+                logger.warning("No sprint data found in any boards")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting real sprint data: {e}")
+            return []
     
     async def check_human_input_needed(self, state: C9SAgentState) -> C9SAgentState:
         """Check if human input is needed before proceeding."""
@@ -658,31 +1401,48 @@ class C9SAgent:
         try:
             # Simple heuristics for when to ask for human input
             query = state["query"].lower()
+            next_action = state.get("next_action")
             
             # Ask for human input if:
             # 1. Query contains sensitive operations
             # 2. Query asks for specific JIRA ticket details
             # 3. Multiple conflicting results
             # 4. Unclear intent
+            # 5. NO RESULTS FOUND FROM TOOL CALLS (this is the main case)
             
             sensitive_operations = ["delete", "remove", "close", "assign", "update", "modify"]
             needs_human_input = any(op in query for op in sensitive_operations)
             
-            # Check for specific JIRA ticket queries
+            # Check for specific JIRA ticket queries that need human input
             if any(word in query for word in ["jira tool", "tool", "specific", "detail", "hakkında", "about"]):
                 needs_human_input = True
             
-            # Check if we have conflicting or unclear results
+            # Check if we have NO results from tool calls - but only if tools were actually used
             web_count = len(state.get("web_results", []))
             jira_count = len(state.get("jira_results", []))
+            document_count = len(state.get("document_results", []))
             
-            if web_count == 0 and jira_count == 0:
-                needs_human_input = True  # No results found
+            # If the router decided on "direct_answer", don't trigger human input for empty tool results
+            if next_action == "direct_answer":
+                # For direct answers, only trigger human input for sensitive operations or specific requests
+                pass  # needs_human_input already set above
+            elif web_count == 0 and jira_count == 0 and document_count == 0:
+                # Only trigger human input if tools were supposed to be used but returned no results
+                if next_action in ["web_search", "jira_search"]:
+                    needs_human_input = True  # Tools were used but found no results
+            elif jira_count > 0 or document_count > 0:
+                # We have JIRA or document results - proceed normally without human input
+                needs_human_input = False
+            elif web_count > 0:
+                # We have web results - proceed normally without human input
+                needs_human_input = False
             
             state["requires_human_input"] = needs_human_input
             
             if needs_human_input:
-                logger.info("Human input required for this query")
+                logger.info(f"Human input required for this query (action: {next_action})")
+            else:
+                logger.info(f"No human input needed - proceeding with available results (action: {next_action})")
             
         except Exception as e:
             logger.error(f"Error checking human input need: {e}")
@@ -700,22 +1460,108 @@ class C9SAgent:
             # Prepare context
             context_parts = []
             
-            if state.get("web_results"):
-                web_context = "\n".join([
-                    f"Web: {result.get('title', 'Unknown')} - {result.get('content', '')[:300]}..."
-                    for result in state["web_results"][:3]
+            # Track data sources and their reliability
+            data_sources = []
+            confidence_levels = []
+            
+            # Check if this is a crypto query to prioritize document results
+            query_lower = state["query"].lower()
+            crypto_keywords = ["cryptobooks", "crypto books", "cryptocurrency", "bitcoin", "ethereum", "blockchain", "defi", "nft"]
+            is_crypto_query = any(keyword in query_lower for keyword in crypto_keywords)
+            
+            # For crypto queries, prioritize documents first
+            if is_crypto_query and state.get("document_results"):
+                # Prioritize documents for crypto queries - add them first and with higher weight
+                document_context = "\n".join([
+                    f"Document: {result.get('title', 'Untitled')} | Source: {result.get('source', 'Unknown')} | Similarity: {result.get('similarity', 0):.3f}\nContent: {result.get('content', '')[:500]}..."
+                    for result in state["document_results"][:5]  # Show more documents for crypto queries
                 ])
-                context_parts.append(f"Web Search Results:\n{web_context}")
+                context_parts.append(f"📚 PRIMARY SOURCE - Knowledge Base Documents (Crypto/Finance):\n{document_context}")
+                data_sources.append("knowledge_base_priority")
+                confidence_levels.append(0.98)  # Very high confidence for crypto knowledge base
+                
+                # Add web results as secondary for crypto queries
+                if state.get("web_results"):
+                    web_context = "\n".join([
+                        f"Web: {result.get('title', 'Unknown')} - {result.get('content', '')[:200]}..."
+                        for result in state["web_results"][:2]  # Fewer web results for crypto queries
+                    ])
+                    context_parts.append(f"🌐 SECONDARY SOURCE - Web Search Results:\n{web_context}")
+                    data_sources.append("web_search_secondary")
+                    confidence_levels.append(0.7)  # Lower confidence for web when we have docs
+            else:
+                # Standard prioritization for non-crypto queries
+                if state.get("web_results"):
+                    web_context = "\n".join([
+                        f"Web: {result.get('title', 'Unknown')} - {result.get('content', '')[:300]}..."
+                        for result in state["web_results"][:3]
+                    ])
+                    context_parts.append(f"Web Search Results:\n{web_context}")
+                    data_sources.append("web_search")
+                    confidence_levels.append(0.8)  # Web search is generally reliable
+                
+                if state.get("document_results"):
+                    document_context = "\n".join([
+                        f"Document: {result.get('title', 'Untitled')} | Source: {result.get('source', 'Unknown')} | Similarity: {result.get('similarity', 0):.3f}\nContent: {result.get('content', '')[:500]}..."
+                        for result in state["document_results"][:3]
+                    ])
+                    context_parts.append(f"Relevant Documents:\n{document_context}")
+                    data_sources.append("knowledge_base")
+                    confidence_levels.append(0.95)  # High confidence for knowledge base documents
             
             if state.get("jira_results"):
-                jira_context = "\n".join([
-                    f"JIRA Ticket {result.get('key', 'N/A')}: {result.get('summary', 'No summary')} | Status: {result.get('status', 'Unknown')} | Assignee: {result.get('assignee', 'Unassigned')} | Type: {result.get('type', 'Unknown')} | Priority: {result.get('priority', 'Unknown')}"
-                    for result in state["jira_results"][:5]
-                ])
-                context_parts.append(f"JIRA Results:\n{jira_context}")
+                # Check if we have sprint results
+                sprint_results = [r for r in state["jira_results"] if r.get("type") == "sprint"]
+                ticket_results = [r for r in state["jira_results"] if r.get("type") != "sprint"]
+                
+                if sprint_results:
+                    sprint_context = "\n".join([
+                        f"Sprint: {result.get('name', 'Unknown')} | State: {result.get('state', 'Unknown')} | Start: {result.get('startDate', 'Unknown')} | End: {result.get('endDate', 'Unknown')} | Goal: {result.get('goal', 'No goal set')}"
+                        for result in sprint_results
+                    ])
+                    context_parts.append(f"Sprint Information:\n{sprint_context}")
+                    data_sources.append("jira_sprint")
+                    # Check if this is simulation data
+                    if any("2024" in str(result.get('startDate', '')) for result in sprint_results):
+                        confidence_levels.append(0.3)  # Low confidence for simulation data
+                    else:
+                        confidence_levels.append(0.9)  # High confidence for real data
+                
+                if ticket_results:
+                    jira_context = "\n".join([
+                        f"JIRA Ticket {result.get('key', 'N/A')}: {result.get('summary', 'No summary')} | Status: {result.get('status', 'Unknown')} | Assignee: {result.get('assignee', 'Unassigned')} | Type: {result.get('type', 'Unknown')} | Priority: {result.get('priority', 'Unknown')}"
+                        for result in ticket_results[:5]
+                    ])
+                    context_parts.append(f"JIRA Results:\n{jira_context}")
+                    data_sources.append("jira_tickets")
+                    confidence_levels.append(0.9)  # JIRA tickets are generally reliable
+                    
+                    # Add detailed information for specific ticket queries
+                    ticket_match = re.search(r'\b([A-Z]+-\d+)\b', state["query"].upper())
+                    if ticket_match and ticket_results:
+                        detailed_ticket = ticket_results[0]  # Get the first (and likely only) result
+                        
+                        # Add ticket details to context
+                        ticket_details = f"""
+Ticket Details for {detailed_ticket.get('key', 'N/A')}:
+- Summary: {detailed_ticket.get('summary', 'No summary')}
+- Status: {detailed_ticket.get('status', 'Unknown')}
+- Assignee: {detailed_ticket.get('assignee', 'Unassigned')}
+- Type: {detailed_ticket.get('type', 'Unknown')}
+- Priority: {detailed_ticket.get('priority', 'Unknown')}
+- Created: {detailed_ticket.get('created', 'Unknown')}
+- Updated: {detailed_ticket.get('updated', 'Unknown')}
+- Project: {detailed_ticket.get('project', 'Unknown')}
+"""
+                        context_parts.append(f"Detailed Ticket Information:\n{ticket_details}")
+                        
+                        # Note about additional information
+                        context_parts.append("Note: For detailed descriptions and comments, you may need to access JIRA directly or use specific JIRA tools.")
             
             if state.get("human_feedback"):
                 context_parts.append(f"Human Feedback: {state['human_feedback']}")
+                data_sources.append("human_input")
+                confidence_levels.append(1.0)  # Human input is most reliable
                 
                 # If human feedback asks for specific ticket details, try to get them
                 ticket_match = re.search(r'([A-Z]+-\d+)', state.get("human_feedback", ""))
@@ -733,6 +1579,8 @@ class C9SAgent:
                         for msg in memory_context["similar_messages"][:2]
                     ])
                     context_parts.append(f"Relevant Past Conversations:\n{similar_context}")
+                    data_sources.append("chat_history")
+                    confidence_levels.append(0.7)  # Chat history is moderately reliable
                 
                 if memory_context.get("recent_messages"):
                     recent_context = "\n".join([
@@ -743,22 +1591,49 @@ class C9SAgent:
             
             context = "\n\n---\n\n".join(context_parts)
             
-            # Create synthesis prompt
+            # Determine overall confidence and data source awareness
+            overall_confidence = min(confidence_levels) if confidence_levels else 0.5
+            is_simulation_data = any("2024" in str(result.get('startDate', '')) for result in state.get("jira_results", []) if result.get("type") == "sprint")
+            
+            # Create synthesis prompt with improved reasoning instructions
             current_date = datetime.now().strftime("%Y-%m-%d")
             
             system_message = SystemMessage(content=f"""
-            You are a helpful assistant that synthesizes information from multiple sources.
+            You are a helpful assistant that provides direct, user-focused answers.
             Current date: {current_date}
             
-            Instructions:
-            1. Provide a clear, comprehensive answer based on the available information
-            2. If using JIRA information, be specific about ticket numbers, statuses, assignees, and priorities
-            3. When presenting JIRA results, format them clearly with ticket keys, summaries, and status
-            4. If using web search results, cite sources when relevant
-            5. If human feedback was provided, incorporate it appropriately
-            6. Be concise but thorough
-            7. If you don't have enough information, say so clearly
-            8. For JIRA queries, always mention the number of tickets found and provide key details
+            CRITICAL INSTRUCTIONS:
+            1. PROVIDE DIRECT ANSWERS - Don't overcomplicate or overanalyze
+            2. If you have data, SHOW IT CLEARLY to the user
+            3. Focus on what the user actually asked for
+            4. Be concise but informative
+            5. If data is limited, say so briefly and show what you have
+            6. Don't make excuses or over-explain limitations
+            
+            SPECIAL HANDLING FOR CRYPTO/CRYPTOBOOKS QUERIES:
+            - For queries about cryptocurrency, blockchain, cryptobooks, or related topics
+            - PRIORITIZE knowledge base documents as PRIMARY SOURCE
+            - Use web results only as supplementary information
+            - Trust internal documentation over external web sources
+            - Provide comprehensive answers from knowledge base first
+            
+            Response Guidelines:
+            1. Start with a direct answer to the user's question
+            2. For crypto queries: Lead with knowledge base information, supplement with web if needed
+            3. For other queries: Balance all available sources appropriately
+            4. If you have JIRA data, present it clearly in a table or list
+            5. Only mention data source issues if they significantly impact the answer
+            6. Keep the response focused and actionable
+            
+            Data Source Analysis:
+            - Knowledge Base (PRIMARY for crypto): Highest reliability, especially for crypto/finance topics
+            - Web search results: Generally reliable but may be outdated, secondary for crypto queries
+            - JIRA tickets: High reliability for current data
+            - Sprint data: Check if dates are current (should be 2025, not 2024)
+            - Human feedback: Most reliable source
+            - Chat history: Moderately reliable for context
+            
+            If you detect simulation data (e.g., 2024 dates in 2025), briefly mention this but still provide the available information.
             """)
             
             human_message = HumanMessage(content=f"""
@@ -767,10 +1642,15 @@ class C9SAgent:
             Available Information:
             {context if context else "No additional information available."}
             
-            Please provide a comprehensive response.
+            Data Sources: {', '.join(data_sources)}
+            Overall Confidence: {overall_confidence:.2f}
+            Is Simulation Data: {is_simulation_data}
+            
+            Provide a direct, user-focused answer to the query. If you have data, show it clearly.
             """)
             
             response = await self.llm.ainvoke([system_message, human_message])
+            self._track_llm_cost(response)
             state["final_answer"] = response.content
             
             # Save assistant response to chat history
@@ -784,7 +1664,11 @@ class C9SAgent:
                     "source": "c9s_agent",
                     "web_results_count": len(state.get("web_results", [])),
                     "jira_results_count": len(state.get("jira_results", [])),
+                    "document_results_count": len(state.get("document_results", [])),
                     "requires_human_input": state.get("requires_human_input", False),
+                    "data_sources": data_sources,
+                    "confidence_level": overall_confidence,
+                    "is_simulation_data": is_simulation_data,
                     "timestamp": datetime.now().isoformat()
                 }
             )
@@ -801,12 +1685,16 @@ class C9SAgent:
         """Decide the next step based on routing decision."""
         next_action = state.get("next_action")
         
-        if next_action == "jira_search":
+        if next_action == "parallel_search":
+            return "parallel_search"
+        elif next_action == "jira_search":
             return "jira_search"
         elif next_action == "web_search":
             return "web_search"
+        elif next_action == "document_search":
+            return "document_search"  # Direct to document search for crypto queries
         elif next_action == "direct_answer":
-            return "human_check"
+            return "document_search"  # Even direct answers should check documents
         else:
             return "web_search"  # Default
     
@@ -825,6 +1713,8 @@ class C9SAgent:
         workflow.add_node("route", self.route_query)
         workflow.add_node("web_search", self.web_search)
         workflow.add_node("jira_search", self.jira_search)
+        workflow.add_node("document_search", self.document_search)
+        workflow.add_node("parallel_search", self.parallel_search_coordinator)
         workflow.add_node("human_check", self.check_human_input_needed)
         workflow.add_node("synthesize", self.synthesize_response)
         
@@ -836,15 +1726,21 @@ class C9SAgent:
             "route",
             self._decide_next_step,
             {
+                "parallel_search": "parallel_search",  # New parallel search route
                 "web_search": "web_search",
-                "jira_search": "jira_search",
-                "human_check": "human_check"
+                "jira_search": "jira_search", 
+                "document_search": "document_search",  # Direct route for crypto queries
+                "human_check": "document_search"  # Even direct answers should check documents
             }
         )
         
-        # Both search nodes go to human check
-        workflow.add_edge("web_search", "human_check")
-        workflow.add_edge("jira_search", "human_check")
+        # Parallel search goes directly to human check (already has all results)
+        workflow.add_edge("parallel_search", "human_check")
+        
+        # Individual search nodes go to document search first, then to human check
+        workflow.add_edge("web_search", "document_search")
+        workflow.add_edge("jira_search", "document_search")
+        workflow.add_edge("document_search", "human_check")
         
         # Conditional edge for human input
         workflow.add_conditional_edges(
@@ -924,7 +1820,9 @@ class C9SAgent:
             messages=[],
             web_results=[],
             jira_results=[],
+            document_results=[],
             next_action=None,
+            tools_to_call=None,
             requires_human_input=False,
             human_feedback=human_feedback,
             final_answer="",
@@ -953,13 +1851,15 @@ class C9SAgent:
                 "metadata": {
                     "web_results_count": len(final_state.get("web_results", [])),
                     "jira_results_count": len(final_state.get("jira_results", [])),
+                    "document_results_count": len(final_state.get("document_results", [])),
                     "next_action": final_state.get("next_action"),
                     "step_results": final_state.get("step_results", {}),
                     "step_timings": final_state.get("step_timings", {})
                 },
                 "sources": {
                     "web_results": final_state.get("web_results", []),
-                    "jira_results": final_state.get("jira_results", [])
+                    "jira_results": final_state.get("jira_results", []),
+                    "document_results": final_state.get("document_results", [])
                 }
             }
             
@@ -971,7 +1871,7 @@ class C9SAgent:
                 "session_id": thread_id,
                 "requires_human_input": False,
                 "metadata": {"error": str(e)},
-                "sources": {"web_results": [], "jira_results": []}
+                "sources": {"web_results": [], "jira_results": [], "document_results": []}
             }
     
     async def get_human_input_context(self, session_id: str) -> Dict[str, Any]:
@@ -1020,6 +1920,21 @@ class C9SAgent:
                     "session_id": actual_session_id,
                     "metadata": {"error": "No state found for session"}
                 }
+            
+            # Check if human feedback contains a new query (contains JIRA-related keywords)
+            feedback_lower = human_feedback.lower()
+            jira_keywords = ["jira", "bug", "bugs", "task", "tasks", "issue", "issues", "assigned", "assignee", "orhan", "done", "not done", "status"]
+            contains_new_query = any(keyword in feedback_lower for keyword in jira_keywords)
+            
+            if contains_new_query:
+                logger.info(f"Human feedback contains new query: {human_feedback}")
+                # Treat human feedback as a new query
+                return await self.process_query(
+                    query=human_feedback,
+                    user_id=user_id or "default_user",
+                    profile_id=profile_id or "default_profile",
+                    session_id=actual_session_id
+                )
             
             # Create updated state with human feedback
             updated_state = current_state.values.copy()

@@ -131,6 +131,7 @@ def display_stats(metadata):
     
     table.add_row("🌐 Web Results:", str(metadata.get('web_results_count', 0)))
     table.add_row("🎫 JIRA Results:", str(metadata.get('jira_results_count', 0)))
+    table.add_row("📚 Document Results:", str(metadata.get('document_results_count', 0)))
     table.add_row("🧭 Routing:", metadata.get('next_action', 'unknown'))
     
     console.print(table)
@@ -140,6 +141,7 @@ def display_sources(sources):
     """Display source information in a structured way."""
     web_results = sources.get("web_results", [])
     jira_results = sources.get("jira_results", [])
+    document_results = sources.get("document_results", [])
     
     if web_results:
         console.print("\n[bold blue]🌐 Web Sources:[/bold blue]")
@@ -177,6 +179,34 @@ def display_sources(sources):
             jira_table.add_row(key, summary, status, ticket_type, assignee)
         
         console.print(jira_table)
+    
+    if document_results:
+        console.print("\n[bold blue]📚 Knowledge Base Documents:[/bold blue]")
+        doc_table = Table(show_header=True, header_style="bold cyan", border_style="purple")
+        doc_table.add_column("Title", style="white", width=35)
+        doc_table.add_column("Source", style="yellow", width=15)
+        doc_table.add_column("Similarity", style="green", width=10)
+        doc_table.add_column("Content Preview", style="dim", width=30)
+        
+        for result in document_results[:3]:  # Show up to 3 document results
+            raw_title = result.get('title', 'Untitled')
+            truncated_title = raw_title[:32] + "..." if len(raw_title) > 35 else raw_title
+            
+            # Make title clickable if content_url is available
+            content_url = result.get('content_url')
+            if content_url and content_url.strip():
+                # Create a clickable link using Rich's link markup
+                title_display = f"[link={content_url}]{truncated_title}[/link]"
+            else:
+                title_display = truncated_title
+            
+            source = result.get('source', 'Unknown')
+            similarity = f"{result.get('similarity', 0):.3f}"
+            content_preview = result.get('content', 'No content')[:27] + "..." if len(result.get('content', '')) > 30 else result.get('content', 'No content')
+            
+            doc_table.add_row(title_display, source, similarity, content_preview)
+        
+        console.print(doc_table)
 
 
 async def handle_human_in_loop(agent, session_id):
@@ -222,6 +252,52 @@ async def handle_human_in_loop(agent, session_id):
         return None
 
 
+async def handle_query_refinement(agent, session_id, user_id, profile_id):
+    """Handle query refinement when JIRA search returns no results."""
+    console.print("\n[bold blue]🔍 Query Refinement Required[/bold blue]")
+    
+    try:
+        # Get the current state to see what feedback is needed
+        context = await agent.get_human_input_context(session_id)
+        
+        if context:
+            console.print(Panel(
+                f"[bold]Original Query:[/bold] {context.get('query', 'Unknown')}\n"
+                f"[bold]Current Step:[/bold] {context.get('current_step', 'Unknown')}\n"
+                f"[bold]JIRA Results:[/bold] {len(context.get('jira_results', []))} found",
+                title="📋 Query Status",
+                border_style="blue"
+            ))
+        
+        # Get refined query from user
+        console.print("\n[bold]Please provide a refined query or say 'NO' to stop:[/bold]")
+        console.print("[dim]Examples: 'show me all bugs', 'tasks assigned to me', 'recent issues'[/dim]")
+        
+        refined_query = input("\n💬 Your refined query: ").strip()
+        
+        if not refined_query:
+            refined_query = "NO"
+            console.print(f"[dim]Using default: {refined_query}[/dim]")
+        
+        console.print(f"\n[green]✅ Refined query received: {refined_query}[/green]")
+        
+        # Continue with refined query
+        step_tracker.track_step("Query Refinement", "starting")
+        result = await agent.continue_with_human_feedback(
+            session_id, 
+            refined_query,
+            user_id=user_id,
+            profile_id=profile_id
+        )
+        step_tracker.track_step("Query Refinement", "completed")
+        
+        return result
+        
+    except Exception as e:
+        console.print(f"[red]❌ Error in query refinement: {e}[/red]")
+        return None
+
+
 async def chat_loop():
     """Main chat loop with C9S agent."""
     display_welcome()
@@ -255,6 +331,9 @@ async def chat_loop():
                     
                     # Handle commands
                     if query.lower() in ['quit', 'exit', 'q']:
+                        # Display cost summary before goodbye
+                        cost_summary = agent.get_cost_summary()
+                        console.print(f"\n[bold cyan]{cost_summary}[/bold cyan]")
                         console.print("[yellow]Goodbye! 👋[/yellow]")
                         break
                     
@@ -313,14 +392,30 @@ async def chat_loop():
                     
                     # Check if human input is required
                     if result.get("requires_human_input"):
-                        result = await handle_human_in_loop(agent, result["session_id"])
+                        # Check if this is query refinement mode
+                        if result.get("metadata", {}).get("query_refinement"):
+                            result = await handle_query_refinement(agent, result["session_id"], user_id, profile_id)
+                        else:
+                            result = await handle_human_in_loop(agent, result["session_id"])
+                        
                         if not result:
                             console.print("[red]❌ Failed to process human feedback[/red]")
                             continue
+                        
+                        # If still requires human input, continue the loop
+                        while result.get("requires_human_input"):
+                            if result.get("metadata", {}).get("query_refinement"):
+                                result = await handle_query_refinement(agent, result["session_id"], user_id, profile_id)
+                            else:
+                                result = await handle_human_in_loop(agent, result["session_id"])
+                            
+                            if not result:
+                                console.print("[red]❌ Failed to process human feedback[/red]")
+                                break
                     
                     # Display answer with streaming effect
                     if result.get("answer"):
-                        console.print("\n[bold green]🚀 Claude says:[/bold green]")
+                        console.print("\n[bold green]🚀 c9s-agent says:[/bold green]")
                         stream_text(result["answer"])
                     else:
                         console.print("\n[red]❌ No answer received[/red]")
@@ -338,10 +433,18 @@ async def chat_loop():
                     console.print("\n" + "─" * 60)
                     display_stats(result.get("metadata", {}))
                     
+                    # Display current cost
+                    cost_summary = agent.get_cost_summary()
+                    console.print(f"[dim]{cost_summary}[/dim]")
+                    
                 except KeyboardInterrupt:
                     console.print("\n[yellow]Use 'quit' to exit gracefully.[/yellow]")
                     continue
                 except EOFError:
+                    # Display cost summary before goodbye
+                    if agent:
+                        cost_summary = agent.get_cost_summary()
+                        console.print(f"\n[bold cyan]{cost_summary}[/bold cyan]")
                     console.print("\n[yellow]Goodbye! 👋[/yellow]")
                     break
                 except Exception as e:
@@ -375,13 +478,17 @@ def main():
                     profile_id="single_query"
                 )
                 
-                console.print("\n[bold green]🚀 Claude says:[/bold green]")
+                console.print("\n[bold green]🚀 c9s-agent says:[/bold green]")
                 stream_text(result["answer"])
                 
                 if result.get("sources"):
                     display_sources(result["sources"])
                 
                 display_stats(result.get("metadata", {}))
+                
+                # Display cost summary
+                cost_summary = agent.get_cost_summary()
+                console.print(f"\n[bold cyan]{cost_summary}[/bold cyan]")
         
         asyncio.run(single_query())
     else:
@@ -393,6 +500,10 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        # Display cost summary before goodbye
+        if 'agent' in locals():
+            cost_summary = agent.get_cost_summary()
+            console.print(f"\n[bold cyan]{cost_summary}[/bold cyan]")
         console.print("\n[yellow]Interrupted. Goodbye! 👋[/yellow]")
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]")
