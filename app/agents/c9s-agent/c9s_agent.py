@@ -1590,9 +1590,10 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
                             f"{msg.get('role', 'User').upper()}: {msg.get('content', '')}"
                             for msg in current_context_messages
                         ])
-                        context_parts.insert(0, f"Current Conversation:\n{conversation_context}")
+                        context_parts.insert(0, f"IMMEDIATE CONVERSATION CONTEXT (Continue from this):\n{conversation_context}")
                         data_sources.append("current_session")
-                        confidence_levels.append(0.9)  # High confidence for current session
+                        confidence_levels.append(1.0)  # Maximum confidence for immediate conversation context
+                        logger.info(f"Including immediate conversation context with {len(current_context_messages)} messages")
                 elif memory_context.get("current_session"):
                     # Fallback to old method if new field not available
                     current_messages = memory_context["current_session"]
@@ -1622,6 +1623,19 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
                         for msg in memory_context["recent_context"][:3]
                     ])
                     context_parts.append(f"Recent Conversation History:\n{recent_context}")
+            
+            # Check for context-dependent short responses (numbers, yes/no, etc.)
+            query_lower = state["query"].lower().strip()
+            is_short_response = len(query_lower) <= 5 and (
+                query_lower.isdigit() or  # Numbers like "1", "2", "3"
+                query_lower in ["yes", "no", "y", "n", "ok", "sure", "good", "bad"] or
+                any(char.isdigit() for char in query_lower)  # Mixed like "2a", "1b"
+            )
+            
+            if is_short_response and state.get("memory_context", {}).get("current_session_context"):
+                # For short responses, emphasize the immediate context even more
+                context_parts.insert(0, f"⚠️ CRITICAL: User provided short response '{state['query']}' - This likely refers to options or questions from the IMMEDIATE conversation above. Respond accordingly to what the user is selecting/answering.")
+                logger.info(f"Detected short response '{state['query']}' - emphasizing conversation context")
             
             context = "\n\n---\n\n".join(context_parts)
             
@@ -1863,6 +1877,18 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
         
         # Get memory context from chat history AFTER saving the current query
         memory_context = await self._get_memory_context(user_id, profile_id, thread_id, query)
+        
+        # Ensure memory context includes current session for immediate context awareness
+        if not memory_context.get("current_session_context"):
+            try:
+                chat_session = await self._get_or_create_chat_session(user_id, profile_id, thread_id)
+                current_messages = chat_session.get_current_messages()
+                if current_messages:
+                    # Include all messages except the current query for better context
+                    memory_context["current_session_context"] = current_messages[:-1] if len(current_messages) > 1 else []
+                    logger.info(f"Enhanced memory context with {len(memory_context['current_session_context'])} current session messages")
+            except Exception as e:
+                logger.warning(f"Could not enhance memory context: {e}")
         
         # Initial state with memory context
         initial_state = C9SAgentState(
