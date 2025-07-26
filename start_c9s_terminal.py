@@ -101,7 +101,7 @@ def display_features():
     console.print(features)
 
 
-def display_main_menu(total_cost: float = 0.0):
+def display_main_menu(total_cost: float = 0.0, user_info: dict = None):
     """Display the main menu for C9S Agent."""
     menu_content = (
         "[bold cyan]🚀 C9S Agent Terminal[/bold cyan]\n\n"
@@ -110,8 +110,15 @@ def display_main_menu(total_cost: float = 0.0):
         "[bold]3.[/bold] 🌐 [blue]API Server[/blue]\n"
         "[bold]4.[/bold] 📚 [green]Help[/green]\n"
         "[bold]5.[/bold] ⚙️  [magenta]Environment Check[/magenta]\n"
-        "[bold]6.[/bold] 🚪 [red]Exit[/red]"
+        "[bold]6.[/bold] 🚪 [yellow]Logout[/yellow]\n"
+        "[bold]7.[/bold] ❌ [red]Exit[/red]"
     )
+    
+    # Add user info if available
+    if user_info:
+        session_short = user_info.get('session_id', 'none')[:8] + '...' if user_info.get('session_id') else 'none'
+        user_display = f"\n[dim]👤 {user_info.get('user_id', 'default')}/{user_info.get('profile_id', 'default')} | Session: {session_short}[/dim]"
+        menu_content = menu_content.replace("[bold]1.[/bold]", f"{user_display}\n\n[bold]1.[/bold]")
     
     # Add cost information if greater than zero
     if total_cost > 0:
@@ -126,6 +133,72 @@ def display_main_menu(total_cost: float = 0.0):
     console.print(Align.center(menu_panel))
     
 
+def user_login() -> dict:
+    """Handle user login flow and return user information."""
+    console.clear()
+    display_banner()
+    
+    login_panel = Panel(
+        "[bold cyan]🔐 User Authentication Required[/bold cyan]\n\n"
+        "Please provide your credentials to access the C9S Agent.\n"
+        "Your user ID and profile ID will be used for session management\n"
+        "and conversation memory persistence.\n\n"
+        "[dim]💡 Tip: Use consistent credentials to maintain chat history[/dim]",
+        title="Login Required",
+        border_style="yellow",
+        padding=(1, 2)
+    )
+    console.print(login_panel)
+    
+    while True:
+        console.print("\n[bold]Authentication:[/bold]")
+        
+        # Get User ID
+        user_id = console.input("[cyan]Enter your User ID:[/cyan] ").strip()
+        if not user_id:
+            console.print("[red]❌ User ID cannot be empty[/red]")
+            continue
+            
+        # Get Profile ID  
+        profile_id = console.input("[cyan]Enter your Profile ID:[/cyan] ").strip()
+        if not profile_id:
+            console.print("[red]❌ Profile ID cannot be empty[/red]")
+            continue
+        
+        # Confirm credentials
+        console.print(f"\n[bold]Confirm Login Credentials:[/bold]")
+        console.print(f"• User ID: [yellow]{user_id}[/yellow]")
+        console.print(f"• Profile ID: [yellow]{profile_id}[/yellow]")
+        
+        confirm = console.input("\n[bold]Continue with these credentials? (y/n):[/bold] ").strip().lower()
+        
+        if confirm in ['y', 'yes']:
+            # Initialize session for this user/profile combination
+            console.print(f"\n[yellow]🔄 Initializing session for {user_id}/{profile_id}...[/yellow]")
+            
+            # Create persistent session ID for this login session
+            import uuid
+            terminal_session_id = str(uuid.uuid4())
+            
+            user_info = {
+                'user_id': user_id,
+                'profile_id': profile_id,
+                'session_id': terminal_session_id  # Persistent UUID for entire terminal session
+            }
+            
+            console.print(f"\n[green]✅ Successfully logged in as {user_id}/{profile_id}[/green]")
+            console.print(f"[dim]Session ID: {terminal_session_id[:8]}...[/dim]")
+            console.print("[dim]Long-term memory and checkpointer initialized...[/dim]")
+            console.input("\nPress Enter to continue to main menu...")
+            
+            return user_info
+        elif confirm in ['n', 'no']:
+            console.print("[yellow]Please re-enter your credentials...[/yellow]")
+            continue
+        else:
+            console.print("[red]Please enter 'y' for yes or 'n' for no[/red]")
+
+
 def main():
     """Main entry point for the terminal launcher."""
     try:
@@ -133,14 +206,17 @@ def main():
         env_ok = check_environment_silent()
         total_session_cost = 0.0
         
+        # Require user login first
+        user_info = user_login()
+        
         while True:
             console.clear()
-            display_main_menu(total_session_cost)
+            display_main_menu(total_session_cost, user_info)
             
             if not env_ok:
                 console.print("\n[yellow]⚠️  Some environment variables are missing[/yellow]")
             
-            choice = console.input("\n[bold]Select option (1-6):[/bold] ").strip()
+            choice = console.input("\n[bold]Select option (1-7):[/bold] ").strip()
             
             if choice == "1":
                 if not env_ok:
@@ -150,7 +226,7 @@ def main():
                 console.print("\n[cyan]💬 Starting Interactive Chat Mode...[/cyan]")
                 
                 # Run chat and capture cost
-                chat_cost = run_chat_with_cost_tracking()
+                chat_cost = run_chat_with_cost_tracking(user_info)
                 if chat_cost > 0:
                     total_session_cost += chat_cost
                     console.print(f"\n[green]💰 Chat session cost: ${chat_cost:.6f}[/green]")
@@ -167,7 +243,7 @@ def main():
                     console.print(f"\n[yellow]Processing: {query}[/yellow]\n")
                     
                     # Run single query and capture cost
-                    query_cost = run_single_query_with_cost_tracking(query)
+                    query_cost = run_single_query_with_cost_tracking(query, user_info)
                     if query_cost > 0:
                         total_session_cost += query_cost
                         console.print(f"\n[green]💰 Query cost: ${query_cost:.6f}[/green]")
@@ -195,13 +271,24 @@ def main():
                 console.input("Press Enter to continue...")
                 
             elif choice == "6":
+                # Logout - return to login screen
+                console.print("\n[yellow]🚪 Logging out...[/yellow]")
+                if total_session_cost > 0:
+                    console.print(f"[cyan]💰 Session Cost: ${total_session_cost:.6f}[/cyan]")
+                console.input("Press Enter to return to login screen...")
+                
+                # Reset session cost and get new user
+                total_session_cost = 0.0
+                user_info = user_login()
+                
+            elif choice == "7":
                 if total_session_cost > 0:
                     console.print(f"\n[bold cyan]💰 Total Session Cost: ${total_session_cost:.6f}[/bold cyan]")
                 console.print("\n[yellow]Goodbye! 👋[/yellow]")
                 break
                 
             else:
-                console.print("[red]Invalid choice. Please select 1-6.[/red]")
+                console.print("[red]Invalid choice. Please select 1-7.[/red]")
                 console.input("Press Enter to continue...")
                 
     except KeyboardInterrupt:
@@ -306,12 +393,35 @@ def display_memory_references(sources):
         console.print()
 
 
-def run_chat_with_cost_tracking():
+def check_agent_configuration() -> bool:
+    """Check if required configuration is available for the agent."""
+    missing_config = []
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        missing_config.append("ANTHROPIC_API_KEY")
+    if not os.getenv("TAVILY_API_KEY"):
+        missing_config.append("TAVILY_API_KEY")
+    
+    if missing_config:
+        console.print(f"\n[red]❌ Missing required configuration:[/red]")
+        for var in missing_config:
+            console.print(f"  - {var}")
+        console.print("\n[yellow]Please set these environment variables and restart.[/yellow]")
+        console.print("[dim]Use option 5 in main menu to check environment configuration.[/dim]")
+        console.input("Press Enter to continue...")
+        return False
+    return True
+
+
+def run_chat_with_cost_tracking(user_info: dict):
     """Run interactive chat and return the total cost incurred."""
     import sys
     import asyncio
     import warnings
     import logging
+    
+    # Check configuration first
+    if not check_agent_configuration():
+        return 0.0
     
     # Import C9S agent
     sys.path.insert(0, str(project_root / "app" / "agents" / "c9s-agent"))
@@ -321,6 +431,8 @@ def run_chat_with_cost_tracking():
         """Run a chat session and return the cost."""
         agent = None
         total_cost = 0.0
+        # Use persistent session ID for both checkpointer and memory
+        persistent_session_id = user_info['session_id']
         
         # Temporarily suppress logging for terminal sessions
         original_levels = {}
@@ -384,9 +496,9 @@ def run_chat_with_cost_tracking():
                             
                             result = await agent.process_query(
                                 query=query,
-                                user_id="terminal_user",
-                                profile_id="default",
-                                session_id=None
+                                user_id=user_info['user_id'],
+                                profile_id=user_info['profile_id'],
+                                session_id=persistent_session_id  # Use persistent session ID for both checkpointer and memory
                             )
                         
                         # Display response
@@ -401,14 +513,21 @@ def run_chat_with_cost_tracking():
                     except EOFError:
                         break
                     except Exception as e:
-                        console.print(f"\n[red]⚠️  Processing error occurred[/red]")
+                        console.print(f"\n[red]⚠️  Processing error occurred: {str(e)}[/red]")
+                        console.print(f"[dim red]Error type: {type(e).__name__}[/dim red]")
+                        # For debugging, print more details
+                        import traceback
+                        console.print(f"[dim red]Details: {traceback.format_exc()[:500]}...[/dim red]")
                         continue
                 
                 # Get cost before context manager exits
                 total_cost = agent.get_total_cost()
                 
         except Exception as e:
-            console.print(f"\n[red]⚠️  Unable to initialize chat session[/red]")
+            console.print(f"\n[red]⚠️  Unable to initialize chat session: {str(e)}[/red]")
+            console.print(f"[dim red]Error type: {type(e).__name__}[/dim red]")
+            import traceback
+            console.print(f"[dim red]Details: {traceback.format_exc()[:500]}...[/dim red]")
             return 0.0
         finally:
             # Restore original logging levels
@@ -424,12 +543,16 @@ def run_chat_with_cost_tracking():
         return asyncio.run(chat_session())
 
 
-def run_single_query_with_cost_tracking(query: str):
+def run_single_query_with_cost_tracking(query: str, user_info: dict):
     """Run a single query and return the cost incurred."""
     import sys
     import asyncio
     import warnings
     import logging
+    
+    # Check configuration first
+    if not check_agent_configuration():
+        return 0.0
     
     # Import C9S agent
     sys.path.insert(0, str(project_root / "app" / "agents" / "c9s-agent"))
@@ -483,9 +606,9 @@ def run_single_query_with_cost_tracking(query: str):
                     
                     result = await agent.process_query(
                         query=query,
-                        user_id="terminal_user",
-                        profile_id="default",
-                        session_id=None
+                        user_id=user_info['user_id'],
+                        profile_id=user_info['profile_id'],
+                        session_id=user_info['session_id']  # Use persistent session for consistency
                     )
                 
                 # Display response
@@ -498,7 +621,10 @@ def run_single_query_with_cost_tracking(query: str):
                 total_cost = agent.get_total_cost()
                 
         except Exception as e:
-            console.print(f"\n[red]⚠️  Unable to process query[/red]")
+            console.print(f"\n[red]⚠️  Unable to process query: {str(e)}[/red]")
+            console.print(f"[dim red]Error type: {type(e).__name__}[/dim red]")
+            import traceback
+            console.print(f"[dim red]Details: {traceback.format_exc()[:500]}...[/dim red]")
             return 0.0
         finally:
             # Restore original logging levels
@@ -512,6 +638,8 @@ def run_single_query_with_cost_tracking(query: str):
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=RuntimeWarning)
         return asyncio.run(single_query())
+
+
 
 
 def show_help():
