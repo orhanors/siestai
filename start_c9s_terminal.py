@@ -5,6 +5,7 @@ import os
 import sys
 import asyncio
 import subprocess
+import time
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
@@ -311,6 +312,14 @@ def check_environment_silent():
     return all(os.getenv(var) for var in required_vars)
 
 
+def typewriter_print(text: str, delay: float = 0.01):
+    """Print text with typewriter effect."""
+    for char in text:
+        console.print(char, end="")
+        time.sleep(delay)
+    console.print()  # Add final newline
+
+
 def display_memory_references(sources):
     """Display a minimal table of memory references with clickable links."""
     from rich.table import Table
@@ -500,8 +509,9 @@ def run_chat_with_cost_tracking(user_info: dict):
                                 session_id=persistent_session_id  # Use persistent session ID for both checkpointer and memory
                             )
                         
-                        # Display response
-                        console.print(f"\n[bold blue]Agent:[/bold blue] {result['answer']}")
+                        # Display response with typewriter effect
+                        console.print(f"\n[bold blue]Agent:[/bold blue] ", end="")
+                        typewriter_print(result['answer'])
                         
                         # Display memory references table with spacing
                         display_memory_references(result.get('sources', {}))
@@ -610,8 +620,9 @@ def run_single_query_with_cost_tracking(query: str, user_info: dict):
                         session_id=user_info['session_id']  # Use persistent session for consistency
                     )
                 
-                # Display response
-                console.print(f"\n[bold blue]Agent:[/bold blue] {result['answer']}")
+                # Display response with typewriter effect
+                console.print(f"\n[bold blue]Agent:[/bold blue] ", end="")
+                typewriter_print(result['answer'])
                 
                 # Display memory references table with spacing
                 display_memory_references(result.get('sources', {}))
