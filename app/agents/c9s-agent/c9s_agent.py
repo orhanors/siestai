@@ -300,7 +300,7 @@ class C9SAgent:
             
         except Exception as e:
             logger.error(f"Error getting memory context: {e}")
-            return {"similar_messages": [], "recent_messages": [], "conversation_context": ""}
+            return {"similar_messages": [], "recent_context": [], "current_session": [], "current_session_context": []}
     
     async def _generate_jql_from_natural_language(self, query: str) -> str:
         """Generate JQL query from natural language using AI."""
@@ -1581,6 +1581,31 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
             # Add memory context if available
             if state.get("memory_context"):
                 memory_context = state["memory_context"]
+                
+                # Add current session context first (most important for continuity)
+                if memory_context.get("current_session_context"):
+                    current_context_messages = memory_context["current_session_context"]
+                    if current_context_messages:
+                        conversation_context = "\n".join([
+                            f"{msg.get('role', 'User').upper()}: {msg.get('content', '')}"
+                            for msg in current_context_messages
+                        ])
+                        context_parts.insert(0, f"Current Conversation:\n{conversation_context}")
+                        data_sources.append("current_session")
+                        confidence_levels.append(0.9)  # High confidence for current session
+                elif memory_context.get("current_session"):
+                    # Fallback to old method if new field not available
+                    current_messages = memory_context["current_session"]
+                    if len(current_messages) > 1:
+                        conversation_context = "\n".join([
+                            f"{msg.get('role', 'User').upper()}: {msg.get('content', '')}"
+                            for msg in current_messages[:-1]  # Exclude current query
+                        ])
+                        context_parts.insert(0, f"Current Conversation:\n{conversation_context}")
+                        data_sources.append("current_session")
+                        confidence_levels.append(0.9)  # High confidence for current session
+                
+                # Add similar past messages from other sessions
                 if memory_context.get("similar_messages"):
                     similar_context = "\n".join([
                         f"Similar past conversation: {msg.get('content', '')[:200]}..."
@@ -1590,10 +1615,11 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
                     data_sources.append("chat_history")
                     confidence_levels.append(0.7)  # Chat history is moderately reliable
                 
-                if memory_context.get("recent_messages"):
+                # Add recent context from other sessions (fixed field name)
+                if memory_context.get("recent_context"):
                     recent_context = "\n".join([
                         f"Recent conversation: {msg.get('content', '')[:200]}..."
-                        for msg in memory_context["recent_messages"][:3]
+                        for msg in memory_context["recent_context"][:3]
                     ])
                     context_parts.append(f"Recent Conversation History:\n{recent_context}")
             
@@ -1618,6 +1644,16 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
             5. If data is limited, say so briefly and show what you have
             6. Don't make excuses or over-explain limitations
             
+            CONVERSATION CONTEXT HANDLING:
+            - ALWAYS check the "Current Conversation" context first
+            - If the user's query is short (like "yes", "no", "ok", etc.), use the conversation context to understand what they're responding to
+            - Maintain conversation continuity by referencing previous exchanges
+            - If the user is agreeing to something you previously asked, provide the requested information or action
+            - If the user is asking for clarification, provide it based on the conversation history
+            - NEVER ignore the conversation context - it's the most important source of information
+            - If the user says "yes" to a previous question, answer that question
+            - If the user asks for more details about something mentioned earlier, provide those details
+            
             SPECIAL HANDLING FOR CRYPTO/CRYPTOBOOKS QUERIES:
             - For queries about cryptocurrency, blockchain, cryptobooks, or related topics
             - PRIORITIZE knowledge base documents as PRIMARY SOURCE
@@ -1632,8 +1668,10 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
             4. If you have JIRA data, present it clearly in a table or list
             5. Only mention data source issues if they significantly impact the answer
             6. Keep the response focused and actionable
+            7. For short responses like "yes", provide the information or action that was previously requested
             
             Data Source Analysis:
+            - Current Session: Highest reliability for conversation continuity
             - Knowledge Base (PRIMARY for crypto): Highest reliability, especially for crypto/finance topics
             - Web search results: Generally reliable but may be outdated, secondary for crypto queries
             - JIRA tickets: High reliability for current data
@@ -1653,6 +1691,13 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
             Data Sources: {', '.join(data_sources)}
             Overall Confidence: {overall_confidence:.2f}
             Is Simulation Data: {is_simulation_data}
+            
+            IMPORTANT: 
+            - If the query is short (like "yes", "no", "ok"), check the "Current Conversation" context to understand what the user is responding to or agreeing with
+            - The "Current Conversation" context is the most important information - use it to maintain conversation continuity
+            - If the user says "yes", look at what question or request they're agreeing to in the conversation history
+            - If the user asks for more details about something mentioned earlier, provide those details
+            - NEVER ignore the conversation context - it's your primary source of information
             
             Provide a direct, user-focused answer to the query. If you have data, show it clearly.
             """)
@@ -1802,10 +1847,7 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
             }
         }
         
-        # Get memory context from chat history using the same session ID
-        memory_context = await self._get_memory_context(user_id, profile_id, thread_id, query)
-        
-        # Save user query to chat history
+        # Save user query to chat history FIRST
         await self._save_to_chat_history(
             user_id=user_id,
             profile_id=profile_id,
@@ -1818,6 +1860,9 @@ Ticket Details for {detailed_ticket.get('key', 'N/A')}:
                 "timestamp": datetime.now().isoformat()
             }
         )
+        
+        # Get memory context from chat history AFTER saving the current query
+        memory_context = await self._get_memory_context(user_id, profile_id, thread_id, query)
         
         # Initial state with memory context
         initial_state = C9SAgentState(

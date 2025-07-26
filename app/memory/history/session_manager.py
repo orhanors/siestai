@@ -209,6 +209,7 @@ class ChatSession:
         """
         memory_context = {
             "current_session": self.get_current_messages(),
+            "current_session_context": self.get_current_messages()[:-1] if len(self.get_current_messages()) > 1 else [],  # All but current query
             "similar_messages": [],
             "recent_context": []
         }

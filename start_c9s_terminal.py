@@ -473,7 +473,6 @@ def run_chat_with_cost_tracking(user_info: dict):
             async with agent:
                 console.print("\n[bold green]🤖 C9S Agent Chat Session Started[/bold green]")
                 console.print("[dim]Type 'exit', 'quit', or 'q' to return to main menu[/dim]")
-                console.print("[yellow]ℹ️  Note: Memory and document search may be limited[/yellow]\n")
                 
                 while True:
                     try:
