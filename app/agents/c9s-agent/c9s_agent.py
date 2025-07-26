@@ -1473,8 +1473,8 @@ class C9SAgent:
             if is_crypto_query and state.get("document_results"):
                 # Prioritize documents for crypto queries - add them first and with higher weight
                 document_context = "\n".join([
-                    f"Document: {result.get('title', 'Untitled')} | Source: {result.get('source', 'Unknown')} | Similarity: {result.get('similarity', 0):.3f}\nContent: {result.get('content', '')[:500]}..."
-                    for result in state["document_results"][:5]  # Show more documents for crypto queries
+                    f"Document: {result.get('title', 'Untitled')} | Source: {result.get('source', 'Unknown')} | Similarity: {result.get('similarity', 0):.3f}\nContent: {result.get('content', '')}"
+                    for result in state["document_results"][:3]  # Use full content for crypto queries
                 ])
                 context_parts.append(f"📚 PRIMARY SOURCE - Knowledge Base Documents (Crypto/Finance):\n{document_context}")
                 data_sources.append("knowledge_base_priority")
@@ -1502,7 +1502,7 @@ class C9SAgent:
                 
                 if state.get("document_results"):
                     document_context = "\n".join([
-                        f"Document: {result.get('title', 'Untitled')} | Source: {result.get('source', 'Unknown')} | Similarity: {result.get('similarity', 0):.3f}\nContent: {result.get('content', '')[:500]}..."
+                        f"Document: {result.get('title', 'Untitled')} | Source: {result.get('source', 'Unknown')} | Similarity: {result.get('similarity', 0):.3f}\nContent: {result.get('content', '')[:1000]}..."
                         for result in state["document_results"][:3]
                     ])
                     context_parts.append(f"Relevant Documents:\n{document_context}")
