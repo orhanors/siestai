@@ -224,6 +224,88 @@ def check_environment_silent():
     return all(os.getenv(var) for var in required_vars)
 
 
+def display_memory_references(sources):
+    """Display a minimal table of memory references with clickable links."""
+    from rich.table import Table
+    
+    # DocumentSource mapping to display names
+    source_display_map = {
+        'intercom_article': 'Intercom',
+        'jira_task': 'JIRA',
+        'confluence_page': 'Confluence',
+        'custom': 'Docs',
+        'web_search': 'Web',
+        'jira_tickets': 'JIRA',
+        'knowledge_base': 'Docs'
+    }
+    
+    all_sources = []
+    
+    # Collect web results
+    if sources.get('web_results'):
+        for result in sources['web_results']:
+            if isinstance(result, dict):
+                title = result.get('title', 'Web Result')
+                url = result.get('url', '')
+                if url:
+                    all_sources.append({'title': title, 'url': url, 'source': 'Web'})
+    
+    # Collect document results
+    if sources.get('document_results'):
+        for result in sources['document_results']:
+            if isinstance(result, dict):
+                title = result.get('title', result.get('filename', 'Document'))
+                url = result.get('url', result.get('content_url', ''))
+                
+                # Handle DocumentSource enum
+                source_type = result.get('source', 'custom')
+                if hasattr(source_type, 'value'):
+                    source_type = source_type.value
+                elif isinstance(source_type, str) and source_type.startswith('DocumentSource.'):
+                    source_type = source_type.replace('DocumentSource.', '').lower()
+                
+                display_source = source_display_map.get(source_type, 'Docs')
+                all_sources.append({'title': title, 'url': url, 'source': display_source})
+    
+    # Collect JIRA results
+    if sources.get('jira_results'):
+        for result in sources['jira_results']:
+            if isinstance(result, dict):
+                title = result.get('summary', result.get('key', 'JIRA Ticket'))
+                url = result.get('url', '')
+                all_sources.append({'title': title, 'url': url, 'source': 'JIRA'})
+    
+    # Only display if we have sources
+    if all_sources:
+        # Add spacing before the table
+        console.print()
+        
+        table = Table(show_header=True, header_style="bold magenta", show_lines=False, box=None, padding=(0, 1))
+        table.add_column("📚 References", style="cyan")
+        table.add_column("Source", style="yellow", width=10)
+        
+        for source in all_sources[:5]:  # Limit to 5 references
+            title = source['title'][:60] + "..." if len(source['title']) > 60 else source['title']
+            
+            # Make title clickable with better formatting
+            if source['url']:
+                # Use Rich's built-in link support with simpler formatting
+                title_display = f"[link={source['url']}]{title}[/link]"
+            else:
+                title_display = title
+                
+            table.add_row(title_display, source['source'])
+        
+        console.print(table)
+        
+        # Add helpful note about clickable links
+        if any(source.get('url') for source in all_sources):
+            console.print("[dim]💡 Tip: Links may be clickable in supported terminals (Cmd+Click or Ctrl+Click)[/dim]")
+        
+        # Add spacing after the table
+        console.print()
+
+
 def run_chat_with_cost_tracking():
     """Run interactive chat and return the total cost incurred."""
     import sys
@@ -309,6 +391,9 @@ def run_chat_with_cost_tracking():
                         
                         # Display response
                         console.print(f"\n[bold blue]Agent:[/bold blue] {result['answer']}")
+                        
+                        # Display memory references table with spacing
+                        display_memory_references(result.get('sources', {}))
                         
                     except KeyboardInterrupt:
                         console.print("\n[yellow]Use 'quit' to exit gracefully.[/yellow]")
@@ -405,6 +490,9 @@ def run_single_query_with_cost_tracking(query: str):
                 
                 # Display response
                 console.print(f"\n[bold blue]Agent:[/bold blue] {result['answer']}")
+                
+                # Display memory references table with spacing
+                display_memory_references(result.get('sources', {}))
                 
                 # Get cost before context manager exits
                 total_cost = agent.get_total_cost()
