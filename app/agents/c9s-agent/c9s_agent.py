@@ -264,7 +264,11 @@ class C9SAgent:
             logger.info(f"Saved {role} message to chat history for session {session_id}")
             
         except Exception as e:
-            logger.error(f"Error saving to chat history: {e}")
+            # Suppress verbose errors for terminal sessions
+            if "terminal_user" not in user_id:
+                logger.error(f"Error saving to chat history: {e}")
+            else:
+                logger.debug(f"Chat history unavailable: {e}")
     
     async def _get_memory_context(
         self,
@@ -575,7 +579,11 @@ class C9SAgent:
                     logger.info("📚 Crypto query - documents will be prioritized in synthesis")
             
         except Exception as e:
-            logger.error(f"Error in document search: {e}")
+            # Suppress verbose errors for terminal sessions
+            if "terminal_user" not in state.get("user_id", ""):
+                logger.error(f"Error in document search: {e}")
+            else:
+                logger.debug(f"Document search unavailable: {e}")
             state["document_results"] = []
             
         return state

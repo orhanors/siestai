@@ -263,7 +263,11 @@ class ChatSession:
             memory_context["recent_context"] = recent_context
             
         except Exception as e:
-            logger.error(f"Error retrieving memory context: {e}")
+            # Suppress verbose errors for terminal sessions
+            if "terminal_user" not in self.user_id:
+                logger.error(f"Error retrieving memory context: {e}")
+            else:
+                logger.debug(f"Memory context unavailable: {e}")
         
         return memory_context
     

@@ -101,100 +101,392 @@ def display_features():
     console.print(features)
 
 
+def display_main_menu(total_cost: float = 0.0):
+    """Display the main menu for C9S Agent."""
+    menu_content = (
+        "[bold cyan]🚀 C9S Agent Terminal[/bold cyan]\n\n"
+        "[bold]1.[/bold] 💬 [cyan]Interactive Chat[/cyan]\n"
+        "[bold]2.[/bold] ⚡ [yellow]Single Query[/yellow]\n"
+        "[bold]3.[/bold] 🌐 [blue]API Server[/blue]\n"
+        "[bold]4.[/bold] 📚 [green]Help[/green]\n"
+        "[bold]5.[/bold] ⚙️  [magenta]Environment Check[/magenta]\n"
+        "[bold]6.[/bold] 🚪 [red]Exit[/red]"
+    )
+    
+    # Add cost information if greater than zero
+    if total_cost > 0:
+        menu_content += f"\n\n[dim]💰 Session Cost: ${total_cost:.6f}[/dim]"
+    
+    menu_panel = Panel(
+        menu_content,
+        title="Main Menu",
+        border_style="cyan",
+        width=40
+    )
+    console.print(Align.center(menu_panel))
+    
+
 def main():
     """Main entry point for the terminal launcher."""
     try:
-        display_banner()
+        # Silent environment check
+        env_ok = check_environment_silent()
+        total_session_cost = 0.0
         
-        # Check environment
-        if not check_environment():
-            console.print("\n[red]❌ Missing required environment variables![/red]")
-            console.print("[yellow]Please check your .env file and try again.[/yellow]")
-            sys.exit(1)
-        
-        console.print("\n[green]✅ Environment check passed![/green]")
-        
-        # Display features
-        display_features()
-        
-        # Ask user what they want to do
-        console.print("\n[bold]Choose an option:[/bold]")
-        console.print("1. 💬 [cyan]Interactive Chat Mode[/cyan] - Full featured terminal chat")
-        console.print("2. ⚡ [yellow]Single Query Mode[/yellow] - Quick one-off questions")
-        console.print("3. 🌐 [blue]API Server Mode[/blue] - Start the HTTP API server")
-        console.print("4. 📚 [green]Help & Documentation[/green] - View agent help")
-        
-        choice = input("\nSelect option (1-4): ").strip()
-        
-        if choice == "1":
-            console.print("\n[cyan]💬 Starting Interactive Chat Mode...[/cyan]")
-            console.print("[dim]You can ask questions, query JIRA, search the web, and more![/dim]\n")
+        while True:
+            console.clear()
+            display_main_menu(total_session_cost)
             
-            # Run the chat interface
-            chat_path = project_root / "app" / "agents" / "c9s-agent" / "test" / "chat.py"
-            subprocess.run([sys.executable, str(chat_path)])
+            if not env_ok:
+                console.print("\n[yellow]⚠️  Some environment variables are missing[/yellow]")
             
-        elif choice == "2":
-            console.print("\n[yellow]⚡ Single Query Mode[/yellow]")
-            query = input("Enter your query: ").strip()
+            choice = console.input("\n[bold]Select option (1-6):[/bold] ").strip()
             
-            if query:
-                console.print(f"\n[yellow]Processing: {query}[/yellow]\n")
-                chat_path = project_root / "app" / "agents" / "c9s-agent" / "test" / "chat.py"
-                subprocess.run([sys.executable, str(chat_path), query])
-            else:
-                console.print("[red]No query provided.[/red]")
+            if choice == "1":
+                if not env_ok:
+                    console.print("\n[red]❌ Please configure environment first (option 5)[/red]")
+                    console.input("Press Enter to continue...")
+                    continue
+                console.print("\n[cyan]💬 Starting Interactive Chat Mode...[/cyan]")
                 
-        elif choice == "3":
-            console.print("\n[blue]🌐 Starting API Server Mode...[/blue]")
-            console.print("[dim]API will be available at http://localhost:8002[/dim]\n")
-            
-            # Start the API server
-            subprocess.run([sys.executable, "-m", "poetry", "run", "c9s-agent"])
-            
-        elif choice == "4":
-            console.print("\n[green]📚 C9S Agent Help & Documentation[/green]")
-            
-            help_panel = Panel(
-                "[bold]🚀 C9S Agent Documentation[/bold]\n\n"
-                "[bold]Quick Start:[/bold]\n"
-                "1. Ensure all environment variables are configured\n"
-                "2. Choose Interactive Chat Mode for full experience\n"
-                "3. Ask natural language questions\n"
-                "4. Agent will route to appropriate tools (JIRA/Web)\n"
-                "5. Provide feedback when prompted for human-in-the-loop\n\n"
-                "[bold]Example Queries:[/bold]\n"
-                "• 'Find recent bugs in the authentication system'\n"
-                "• 'What are the latest AI safety research developments?'\n"
-                "• 'Show me high priority tickets assigned to John'\n"
-                "• 'Close all resolved tickets from last week'\n\n"
-                "[bold]Human-in-the-Loop:[/bold]\n"
-                "• Agent pauses for sensitive operations\n"
-                "• You provide guidance or approval\n"
-                "• Agent continues with your feedback\n\n"
-                "[bold]Environment Variables:[/bold]\n"
-                "• ANTHROPIC_API_KEY - Required for Claude LLM\n"
-                "• TAVILY_API_KEY - Required for web search\n"
-                "• JIRA_* - Required for JIRA integration\n"
-                "• LANGSMITH_API_KEY - Optional for tracing\n\n"
-                "[bold]API Endpoints (Server Mode):[/bold]\n"
-                "• POST /chat - Send messages to agent\n"
-                "• GET /health - Check agent status\n"
-                "• GET /status - View configuration\n\n"
-                "[dim]For more information, check the README.md file.[/dim]",
-                title="📖 Help & Documentation",
-                border_style="blue"
-            )
-            console.print(help_panel)
-            
-        else:
-            console.print("[red]Invalid choice. Please select 1-4.[/red]")
-            
+                # Run chat and capture cost
+                chat_cost = run_chat_with_cost_tracking()
+                if chat_cost > 0:
+                    total_session_cost += chat_cost
+                    console.print(f"\n[green]💰 Chat session cost: ${chat_cost:.6f}[/green]")
+                    console.input("Press Enter to continue...")
+                
+            elif choice == "2":
+                if not env_ok:
+                    console.print("\n[red]❌ Please configure environment first (option 5)[/red]")
+                    console.input("Press Enter to continue...")
+                    continue
+                console.print("\n[yellow]⚡ Single Query Mode[/yellow]")
+                query = console.input("Enter your query: ").strip()
+                if query:
+                    console.print(f"\n[yellow]Processing: {query}[/yellow]\n")
+                    
+                    # Run single query and capture cost
+                    query_cost = run_single_query_with_cost_tracking(query)
+                    if query_cost > 0:
+                        total_session_cost += query_cost
+                        console.print(f"\n[green]💰 Query cost: ${query_cost:.6f}[/green]")
+                else:
+                    console.print("[red]No query provided.[/red]")
+                console.input("Press Enter to continue...")
+                
+            elif choice == "3":
+                if not env_ok:
+                    console.print("\n[red]❌ Please configure environment first (option 5)[/red]")
+                    console.input("Press Enter to continue...")
+                    continue
+                console.print("\n[blue]🌐 Starting API Server Mode...[/blue]")
+                console.print("[dim]API will be available at http://localhost:8002[/dim]\n")
+                subprocess.run([sys.executable, "-m", "poetry", "run", "c9s-agent"])
+                
+            elif choice == "4":
+                show_help()
+                console.input("Press Enter to continue...")
+                
+            elif choice == "5":
+                console.clear()
+                display_banner()
+                env_ok = check_environment()
+                console.input("Press Enter to continue...")
+                
+            elif choice == "6":
+                if total_session_cost > 0:
+                    console.print(f"\n[bold cyan]💰 Total Session Cost: ${total_session_cost:.6f}[/bold cyan]")
+                console.print("\n[yellow]Goodbye! 👋[/yellow]")
+                break
+                
+            else:
+                console.print("[red]Invalid choice. Please select 1-6.[/red]")
+                console.input("Press Enter to continue...")
+                
     except KeyboardInterrupt:
         console.print("\n[yellow]Goodbye! 👋[/yellow]")
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]")
         sys.exit(1)
+
+
+def check_environment_silent():
+    """Silently check if all required environment variables are set."""
+    required_vars = [
+        "ANTHROPIC_API_KEY",
+        "TAVILY_API_KEY", 
+        "JIRA_URL",
+        "JIRA_USERNAME",
+        "JIRA_API_KEY"
+    ]
+    
+    return all(os.getenv(var) for var in required_vars)
+
+
+def run_chat_with_cost_tracking():
+    """Run interactive chat and return the total cost incurred."""
+    import sys
+    import asyncio
+    import warnings
+    import logging
+    
+    # Import C9S agent
+    sys.path.insert(0, str(project_root / "app" / "agents" / "c9s-agent"))
+    from c9s_agent import C9SAgent
+    
+    async def chat_session():
+        """Run a chat session and return the cost."""
+        agent = None
+        total_cost = 0.0
+        
+        # Temporarily suppress logging for terminal sessions
+        original_levels = {}
+        loggers_to_suppress = [
+            'app.memory.history.session_manager',
+            'app.agents.c9s-agent.c9s_agent',
+            'app.memory.database.database',
+            'app.memory',
+            'app.agents',
+            '__main__',
+            'root'
+        ]
+        
+        # Also suppress root logger to catch any unspecific loggers
+        root_logger = logging.getLogger()
+        original_root_level = root_logger.level
+        root_logger.setLevel(logging.CRITICAL)
+        
+        for logger_name in loggers_to_suppress:
+            logger_obj = logging.getLogger(logger_name)
+            original_levels[logger_name] = logger_obj.level
+            logger_obj.setLevel(logging.CRITICAL)
+        
+        try:
+            # Initialize agent
+            config = {
+                "model": os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+                "temperature": float(os.getenv("CLAUDE_TEMPERATURE", "0.1")),
+                "tavily_api_key": os.getenv("TAVILY_API_KEY"),
+                "jira_mcp_path": os.getenv("JIRA_MCP_PATH"),
+                "enable_human_loop": os.getenv("ENABLE_HUMAN_LOOP", "true").lower() == "true",
+                "postgres_connection_string": os.getenv("DATABASE_URL")
+            }
+            
+            agent = C9SAgent(**config)
+            
+            # Use proper async context management
+            async with agent:
+                console.print("\n[bold green]🤖 C9S Agent Chat Session Started[/bold green]")
+                console.print("[dim]Type 'exit', 'quit', or 'q' to return to main menu[/dim]")
+                console.print("[yellow]ℹ️  Note: Memory and document search may be limited[/yellow]\n")
+                
+                while True:
+                    try:
+                        # Get user input
+                        query = console.input("\n[bold cyan]You:[/bold cyan] ").strip()
+                        
+                        # Handle exit commands
+                        if query.lower() in ['quit', 'exit', 'q']:
+                            break
+                            
+                        if not query:
+                            continue
+                            
+                        # Process query with error suppression
+                        console.print("\n[yellow]🔄 Processing...[/yellow]")
+                        
+                        # Suppress runtime warnings during processing
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", category=RuntimeWarning)
+                            
+                            result = await agent.process_query(
+                                query=query,
+                                user_id="terminal_user",
+                                profile_id="default",
+                                session_id=None
+                            )
+                        
+                        # Display response
+                        console.print(f"\n[bold blue]Agent:[/bold blue] {result['answer']}")
+                        
+                    except KeyboardInterrupt:
+                        console.print("\n[yellow]Use 'quit' to exit gracefully.[/yellow]")
+                        continue
+                    except EOFError:
+                        break
+                    except Exception as e:
+                        console.print(f"\n[red]⚠️  Processing error occurred[/red]")
+                        continue
+                
+                # Get cost before context manager exits
+                total_cost = agent.get_total_cost()
+                
+        except Exception as e:
+            console.print(f"\n[red]⚠️  Unable to initialize chat session[/red]")
+            return 0.0
+        finally:
+            # Restore original logging levels
+            root_logger.setLevel(original_root_level)
+            for logger_name, original_level in original_levels.items():
+                logging.getLogger(logger_name).setLevel(original_level)
+        
+        return total_cost
+    
+    # Suppress warnings for the entire async run
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
+        return asyncio.run(chat_session())
+
+
+def run_single_query_with_cost_tracking(query: str):
+    """Run a single query and return the cost incurred."""
+    import sys
+    import asyncio
+    import warnings
+    import logging
+    
+    # Import C9S agent
+    sys.path.insert(0, str(project_root / "app" / "agents" / "c9s-agent"))
+    from c9s_agent import C9SAgent
+    
+    async def single_query():
+        """Process a single query and return the cost."""
+        agent = None
+        total_cost = 0.0
+        
+        # Temporarily suppress logging for terminal sessions
+        original_levels = {}
+        loggers_to_suppress = [
+            'app.memory.history.session_manager',
+            'app.agents.c9s-agent.c9s_agent',
+            'app.memory.database.database',
+            'app.memory',
+            'app.agents',
+            '__main__',
+            'root'
+        ]
+        
+        # Also suppress root logger to catch any unspecific loggers
+        root_logger = logging.getLogger()
+        original_root_level = root_logger.level
+        root_logger.setLevel(logging.CRITICAL)
+        
+        for logger_name in loggers_to_suppress:
+            logger_obj = logging.getLogger(logger_name)
+            original_levels[logger_name] = logger_obj.level
+            logger_obj.setLevel(logging.CRITICAL)
+        
+        try:
+            # Initialize agent
+            config = {
+                "model": os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+                "temperature": float(os.getenv("CLAUDE_TEMPERATURE", "0.1")),
+                "tavily_api_key": os.getenv("TAVILY_API_KEY"),
+                "jira_mcp_path": os.getenv("JIRA_MCP_PATH"),
+                "enable_human_loop": os.getenv("ENABLE_HUMAN_LOOP", "true").lower() == "true",
+                "postgres_connection_string": os.getenv("DATABASE_URL")
+            }
+            
+            agent = C9SAgent(**config)
+            
+            # Use proper async context management
+            async with agent:
+                # Process query with error suppression
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=RuntimeWarning)
+                    
+                    result = await agent.process_query(
+                        query=query,
+                        user_id="terminal_user",
+                        profile_id="default",
+                        session_id=None
+                    )
+                
+                # Display response
+                console.print(f"\n[bold blue]Agent:[/bold blue] {result['answer']}")
+                
+                # Get cost before context manager exits
+                total_cost = agent.get_total_cost()
+                
+        except Exception as e:
+            console.print(f"\n[red]⚠️  Unable to process query[/red]")
+            return 0.0
+        finally:
+            # Restore original logging levels
+            root_logger.setLevel(original_root_level)
+            for logger_name, original_level in original_levels.items():
+                logging.getLogger(logger_name).setLevel(original_level)
+        
+        return total_cost
+    
+    # Suppress warnings for the entire async run
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
+        return asyncio.run(single_query())
+
+
+def show_help():
+    """Display help information."""
+    console.clear()
+    
+    # Main documentation panel
+    help_panel = Panel(
+        "[bold cyan]🤖 What is C9S Agent?[/bold cyan]\n"
+        "An intelligent AI assistant that combines Claude 3.5 Sonnet with enterprise tools\n"
+        "to help with project management, research, and workflow automation.\n\n"
+        
+        "[bold yellow]🛠️  Available Tools:[/bold yellow]\n"
+        "• [blue]Claude 3.5 Sonnet[/blue] - Advanced reasoning and conversation\n"
+        "• [green]Tavily Web Search[/green] - Real-time internet information\n"
+        "• [red]JIRA Integration[/red] - Ticket management via MCP protocol\n"
+        "• [purple]LangGraph Workflow[/purple] - Multi-step task orchestration\n"
+        "• [magenta]Human-in-the-Loop[/magenta] - Interactive decision making\n\n"
+        
+        "[bold green]🧠 Memory System:[/bold green]\n"
+        "• [cyan]Vector Database[/cyan] - Semantic search through documents\n"
+        "• [yellow]Chat History[/yellow] - Session-based conversation memory\n"
+        "• [blue]Knowledge Graph[/blue] - Structured relationship mapping\n"
+        "• [white]PostgreSQL + pgvector[/white] - Persistent storage backend\n\n"
+        
+        "[bold red]🎯 Use Cases:[/bold red]\n"
+        "• Query and manage JIRA tickets intelligently\n"
+        "• Research latest information from the web\n"
+        "• Combine multiple data sources for insights\n"
+        "• Automate workflows with safety checks\n"
+        "• Maintain context across conversations\n\n"
+        
+        "[dim]💡 The agent automatically chooses the right tools for your task[/dim]",
+        title="📖 C9S Agent Documentation",
+        border_style="blue",
+        padding=(1, 2)
+    )
+    console.print(help_panel)
+    
+    # Quick start panel
+    console.print()
+    quick_start_panel = Panel(
+        "[bold]1.[/bold] Configure environment (option 5 in main menu)\n"
+        "[bold]2.[/bold] Choose Interactive Chat for full experience\n"
+        "[bold]3.[/bold] Ask natural language questions - agent handles the rest!\n\n"
+        
+        "[bold cyan]Example Queries:[/bold cyan]\n"
+        "[dim]Project Management:[/dim]\n"
+        "• 'Show me all critical bugs assigned to the auth team'\n"
+        "• 'Create a summary of completed tickets this sprint'\n\n"
+        "[dim]Research & Information:[/dim]\n"
+        "• 'What are the latest developments in AI safety?'\n"
+        "• 'Find best practices for microservices architecture'\n\n"
+        "[dim]Workflow Automation:[/dim]\n"
+        "• 'Close all resolved tickets from last week'\n"
+        "• 'Update ticket priorities based on security findings'",
+        title="🚀 Quick Start Guide",
+        border_style="green",
+        padding=(1, 2)
+    )
+    console.print(quick_start_panel)
+    
+    console.print("\n[dim]Press Enter to return to main menu...[/dim]")
 
 
 if __name__ == "__main__":
